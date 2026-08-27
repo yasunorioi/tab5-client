@@ -14,7 +14,8 @@
 //      (so AttEuler reads as pitch/roll, not heading-only).
 //   2. setSBFOutput, Stream1, USB1, PVTGeodetic+AttEuler+ReceiverStatus+DOP,
 //      msec100 — the 10 Hz block set sbf_parser.c decodes.
-// Also enables GGA+GSV NMEA on USB2 for the on-panel GNSS view.
+// Also enables GGA+GSV NMEA on USB2 (on-panel GNSS view) and 10 Hz GGA on COM1
+// at 38400 baud (external RS232 machine controller / auto-steer).
 //
 // Applied to the receiver's CURRENT (RAM) config only — NOT saved to its boot
 // config. The box re-provisions on every power-up, so it stays the source of

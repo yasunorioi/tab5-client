@@ -30,14 +30,26 @@ static const char *TAG = "mosaic_cfg";
 #define ATT_OFFSET "setAttitudeOffset, 90, 0"
 
 // NMEA for the on-panel GNSS view (skyplot + C/N0 bars). GSV carries per-
-// satellite azimuth/elevation/SNR; GGA carries the base position. Emitted on a
-// SEPARATE port (USB2 = itf4) so the RTCM3 caster stream on USB1 stays pure —
-// the box opens itf4 read-only for display (see nmea_source.c). USB2 by name, so
+// satellite azimuth/elevation/SNR; GGA carries the position. Emitted on a
+// SEPARATE port (USB2 = itf2 on this P3H) so the SBF stream on USB1 stays pure —
+// the box opens itf2 read-only for display (see nmea_source.c). USB2 by name, so
 // it applies regardless of which command interface we send it on.
 #define NMEA_PORT   "USB2"
 #define NMEA_STREAM "Stream1"
 #define NMEA_MSGS   "GGA+GSV"
 #define NMEA_RATE   "sec1"
+
+// External RS232 output: 10 Hz GGA on COM1 (38400) for the machine controller /
+// auto-steer, taken off the mosaic-go's serial port through an RS232 transceiver.
+// Fully independent of the USB SBF path — RTCM3 comes in over USB (NTRIP), so this
+// GGA carries the RTK-corrected position (quality 4). NMEA output streams are
+// numbered separately from SBF, so Stream2 here does not clash with the panel
+// NMEA (Stream1) or the SBF stream.
+#define COM_PORT        "COM1"
+#define COM_BAUD        "baud38400"
+#define COM_NMEA_STREAM "Stream2"
+#define COM_NMEA_MSGS   "GGA"
+#define COM_NMEA_RATE   "msec100"
 
 // Find `needle` in the first `len` bytes of `hay` (which may contain NUL/binary,
 // since a reply captured from a streaming port carries teed RTCM3 bytes).
@@ -71,6 +83,47 @@ static void provision_nmea(void)
         return;
     }
     ESP_LOGI(TAG, "Mosaic NMEA output provisioned on " NMEA_PORT " (" NMEA_MSGS ")");
+}
+
+// Best-effort: 10 Hz GGA on COM1 (38400 8N1) for an external RS232 consumer
+// (blade controller / auto-steer). Sets the COM baud first, then the NMEA output.
+// Logs only — a failure here costs the RS232 feed, never the SBF data path. COM1
+// is a distinct port from our USB1 command channel, so changing its baud is safe.
+static void provision_com_gga(void)
+{
+    char cmd[128];
+    char reply[256];
+    size_t n = 0;
+
+    snprintf(cmd, sizeof(cmd), "setCOMSettings, " COM_PORT ", " COM_BAUD);
+    if (usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000) != ESP_OK) {
+        ESP_LOGW(TAG, "COM settings TX failed");
+        return;
+    }
+    if (buf_contains(reply, n, "$R?")) {
+        ESP_LOGW(TAG, "Mosaic rejected setCOMSettings ($R?) — continuing");
+    }
+
+    n = 0;
+    snprintf(cmd, sizeof(cmd), "setNMEAOutput, " COM_NMEA_STREAM ", " COM_PORT
+             ", " COM_NMEA_MSGS ", " COM_NMEA_RATE);
+    if (usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000) != ESP_OK) {
+        ESP_LOGW(TAG, "COM GGA TX failed");
+        return;
+    }
+    if (buf_contains(reply, n, "$R?")) {
+        ESP_LOGW(TAG, "Mosaic rejected COM GGA output ($R?)");
+        return;
+    }
+    ESP_LOGI(TAG, "Mosaic GGA @10Hz provisioned on " COM_PORT " (" COM_BAUD ")");
+}
+
+// All the auxiliary (non-SBF) outputs: panel NMEA on USB2 + RS232 GGA on COM1.
+// Each is independent and best-effort, so one being rejected never blocks the other.
+static void provision_aux_outputs(void)
+{
+    provision_nmea();
+    provision_com_gga();
 }
 
 esp_err_t mosaic_provision(void)
@@ -118,10 +171,10 @@ esp_err_t mosaic_provision(void)
         // Bytes but no ack — likely buried under SBF binary on an already-
         // streaming port. The command almost certainly applied; best-effort OK.
         ESP_LOGW(TAG, "no $R: ack in %u B reply (buried in stream?) — assuming applied", (unsigned)n);
-        provision_nmea();
+        provision_aux_outputs();
         return ESP_OK;
     }
     ESP_LOGI(TAG, "Mosaic SBF output provisioned on " SBF_PORT " (" SBF_MSGS " @" SBF_RATE ")");
-    provision_nmea();
+    provision_aux_outputs();
     return ESP_OK;
 }
