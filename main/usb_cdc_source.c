@@ -28,6 +28,7 @@
 #include "rtcm_sink.h"
 #include "rtcm_monitor.h"   // valid-RTCM3 gate for the interface sweep
 #include "mosaic_config.h"  // push RTCM3 output config to the receiver on attach
+#include "mosaic_usb.h"     // MOSAIC_VID / MOSAIC_PID (shared with nmea_source.c)
 
 static const char *TAG = "usb_cdc";
 
@@ -47,8 +48,7 @@ void usb_cdc_source_status(usb_cdc_status_t *out)
 //   itf 6   = MSC (internal disk)  — NO ECM/RNDIS network interface present.
 // Which COM carries RTCM3 is a receiver-config choice, so we SWEEP the three
 // comm-interface indices until one actually streams bytes (see cdc_task).
-#define MOSAIC_VID        0x152A
-#define MOSAIC_PID        0x85C0
+// MOSAIC_VID / MOSAIC_PID come from mosaic_usb.h (shared with nmea_source.c).
 
 // bInterfaceNumber of each CDC-ACM *communications* interface (the data
 // interface is the next one). cdc_acm_host_open()'s interface_idx is this
@@ -56,6 +56,7 @@ void usb_cdc_source_status(usb_cdc_status_t *out)
 // descriptor(config, intf_idx, 0, ...)).
 static const uint8_t MOSAIC_COM_ITFS[] = {0, 2, 4};
 #define MOSAIC_SWEEP_DWELL_MS  6000   // wait this long for bytes before hopping
+#define MOSAIC_OPEN_RETRIES    3      // open retries before hopping off an un-openable itf
 
 // USB CDC ignores the real line rate, but the Mosaic virtual COM may honor it.
 // Set the Mosaic COM to match (RTCM3 MSM7 all-constellation @1Hz wants margin).
@@ -269,7 +270,8 @@ static void cdc_task(void *arg)
         .bDataBits = 8,
     };
 
-    size_t sweep = 0;   // index into MOSAIC_COM_ITFS
+    size_t sweep = 0;      // index into MOSAIC_COM_ITFS
+    int open_fails = 0;    // consecutive open failures on the CURRENT sweep itf
     while (1) {
         uint8_t itf = MOSAIC_COM_ITFS[sweep];
         cdc_acm_dev_hdl_t cdc = NULL;
@@ -277,10 +279,23 @@ static void cdc_task(void *arg)
                  itf, MOSAIC_VID, MOSAIC_PID);
         esp_err_t err = cdc_acm_host_open(MOSAIC_VID, MOSAIC_PID, itf, &dev_cfg, &cdc);
         if (err != ESP_OK) {
-            // Device not present yet (still booting) — retry same itf, don't hop.
+            // Two causes look identical here: the device is still booting (a
+            // retry on the SAME itf will succeed shortly), or this itf index
+            // simply doesn't exist on this individual (retrying forever never
+            // succeeds — e.g. a unit that enumerates only itf {0,2}, not
+            // {0,2,4}). Retry a few times for the boot case, then HOP so we can
+            // never wedge on a phantom itf and starve the itf that actually
+            // carries RTCM3.
             vTaskDelay(pdMS_TO_TICKS(1000));
+            if (++open_fails >= MOSAIC_OPEN_RETRIES) {
+                ESP_LOGW(TAG, "itf=%d not openable after %d tries — hopping",
+                         itf, open_fails);
+                open_fails = 0;
+                sweep = (sweep + 1) % (sizeof(MOSAIC_COM_ITFS) / sizeof(MOSAIC_COM_ITFS[0]));
+            }
             continue;
         }
+        open_fails = 0;   // opened OK — reset the per-itf failure counter
         ESP_LOGI(TAG, "Mosaic CDC opened on itf=%d", itf);
         s_cdc = cdc;
         s_status.cdc_open = true;

@@ -66,6 +66,15 @@ fault brick the box — exactly the opposite of the offline-autonomy promise.
    Mosaic by hand — but note only **USB1 (itf2)** answers commands; the first COM
    (itf0) is silent both ways, so provisioning is attempted per-swept-interface
    until one acks.
+
+   > ⚠ The specific layout above — **3 CDC COMs + MSC, itf0 silent both ways** —
+   > is what *one* development unit enumerated as. It is **not** a mosaic-go
+   > invariant: another individual/firmware (the P3H in `docs/hardware-findings.md`)
+   > comes up as PID `0x8231` with only **two** CDC COMs (itf {0,2}), no
+   > mass-storage interface, and itf0 *does* answer commands. Don't hard-code
+   > these; the sweep exists precisely because the topology varies. Since a unit
+   > can expose fewer interfaces than `MOSAIC_COM_ITFS` lists, the sweep now hops
+   > off an un-openable itf after a few retries instead of retrying it forever.
 2. **USB-A VBUS is gated by an I/O expander.** The 5V rail on the USB-A host port
    is switched by PI4IOE5V6408 #2 (I²C `0x44`, P3 = USB5V_EN, active-high) — see
    `board_power.c`. Without driving it the Mosaic is only trickle-powered and its

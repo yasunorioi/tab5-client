@@ -12,11 +12,11 @@
 #include "esp_log.h"
 #include "usb/cdc_acm_host.h"
 
+#include "mosaic_usb.h"   // MOSAIC_VID / MOSAIC_PID (shared with usb_cdc_source.c)
+
 static const char *TAG = "nmea";
 
 // Same composite device as the RTCM3 source; itf4 is the NMEA (USB2) COM.
-#define MOSAIC_VID  0x152A
-#define MOSAIC_PID  0x85C0
 #define NMEA_ITF    4
 #define NMEA_BAUD   460800
 
