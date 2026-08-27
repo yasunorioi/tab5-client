@@ -14,6 +14,7 @@
 
 #include "gnss_state.h"
 #include "leveler.h"
+#include "ntrip_client.h"
 #include "usb_cdc_source.h"
 #include "wifi_sta.h"
 #include "display.h"
@@ -124,6 +125,44 @@ static int cmd_cutfill(int argc, char **argv)
     }
     const char *st = s.state > 0 ? "CUT" : s.state < 0 ? "FILL" : "ON GRADE";
     printf("%s  delta=%+.3f m (%+.0f cm)\n", st, s.delta_m, s.delta_m * 100.0);
+    return 0;
+}
+
+static int cmd_ntrip(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    ntrip_client_status_t s;
+    ntrip_client_status(&s);
+    printf("ntrip: %s  connected=%d\n", s.last_msg, s.connected);
+    if (s.configured) {
+        printf("  caster=%s:%u/%s  in=%llu B  reconnects=%lu\n",
+               s.host, s.port, s.mount,
+               (unsigned long long)s.bytes_in, (unsigned long)s.reconnects);
+    } else {
+        printf("  no caster set (ntripset <host> <port> <mount>)\n");
+    }
+    return 0;
+}
+
+static int cmd_ntripset(int argc, char **argv)
+{
+    if (argc < 4) {
+        printf("usage: ntripset <host> <port> <mount>\n");
+        printf("  e.g. ntripset rtk.toiso.fit 2101 eniwa-bd982\n");
+        return 0;
+    }
+    int port = atoi(argv[2]);
+    if (port <= 0 || port > 65535) { printf("bad port: %s\n", argv[2]); return 0; }
+    ntrip_client_set(argv[1], (uint16_t)port, argv[3]);
+    printf("caster set %s:%d/%s — connecting on next cycle\n", argv[1], port, argv[3]);
+    return 0;
+}
+
+static int cmd_ntripreset(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    ntrip_client_forget();
+    printf("caster creds erased — NTRIP client idles\n");
     return 0;
 }
 
@@ -322,6 +361,9 @@ static void register_cmds(void)
         { .command = "survey", .help = "cut/fill survey: survey [add|clear|fit] (no arg = status)", .hint = "[add|clear|fit]", .func = cmd_survey },
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
+        { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },
+        { .command = "ntripset", .help = "set the base caster: ntripset <host> <port> <mount>", .hint = "<host> <port> <mount>", .func = cmd_ntripset },
+        { .command = "ntripreset", .help = "erase caster creds (NTRIP client idles)", .func = cmd_ntripreset },
         { .command = "usb",   .help = "USB host / CDC attach state",          .func = cmd_usb   },
         { .command = "mosaic", .help = "send a raw Septentrio command to the Mosaic + print reply", .hint = "<command>", .func = cmd_mosaic },
         { .command = "disp", .help = "fill the panel with a color (light-up test): disp <red|green|blue|white|black|hex> [bl%]", .hint = "[color] [bl%]", .func = cmd_disp },

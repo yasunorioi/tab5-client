@@ -23,6 +23,7 @@
 #include "nvs.h"
 
 #include "web_server.h"
+#include "ntrip_client.h"
 
 static const char *TAG = "wifi";
 
@@ -119,6 +120,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = true;
         if (!s_services_started) {
             s_services_started = true;
+            // NTRIP client: pull RTCM3 from the base and feed the receiver so it
+            // can reach an RTK fix. Needs the network that just came up.
+            ntrip_client_start();
             // Read-only status web UI (http://rtk.local:8080). De-gated: a failed
             // httpd start is logged, never fatal — the leveler UI on the panel and
             // the SBF data path must not depend on it.

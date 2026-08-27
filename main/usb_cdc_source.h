@@ -50,3 +50,8 @@ void usb_cdc_source_status(usb_cdc_status_t *out);
 // NUL) into the reply alongside the ASCII response.
 esp_err_t usb_cdc_send_command(const char *cmd, char *reply, size_t reply_max,
                                size_t *reply_len, uint32_t timeout_ms);
+
+// Write raw bytes to the open CDC interface (RTCM3 corrections from the NTRIP
+// client → the receiver, which auto-detects RTCM3 input). Returns
+// ESP_ERR_INVALID_STATE if no interface is open.
+esp_err_t usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms);

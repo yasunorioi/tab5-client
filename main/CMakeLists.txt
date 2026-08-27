@@ -8,6 +8,7 @@ idf_component_register(
         "cutfill.c"
         "gnss_state.c"
         "leveler.c"
+        "ntrip_client.c"
         "debug_console.c"
         "net_mdns.c"
         "board_power.c"
@@ -23,6 +24,6 @@ idf_component_register(
         "web_server.c"
     INCLUDE_DIRS "."
     REQUIRES console esp_timer mdns esp_driver_i2c esp_netif esp_event
-             esp_wifi esp_wifi_remote nvs_flash lwip esp_http_server mbedtls
+             esp_wifi esp_wifi_remote nvs_flash lwip esp_http_server esp_http_client mbedtls
              esp_lcd esp_lcd_ili9881c esp_driver_ledc esp_lvgl_port esp_mm
 )

@@ -202,6 +202,15 @@ static bool cdc_data_cb(const uint8_t *data, size_t data_len, void *user_arg)
     return true;
 }
 
+esp_err_t usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{
+    cdc_acm_dev_hdl_t cdc = s_cdc;
+    if (cdc == NULL || data == NULL) return ESP_ERR_INVALID_STATE;
+    // Raw pass-through to the receiver (RTCM3 corrections from the NTRIP client).
+    // The Mosaic auto-detects RTCM3 input on any port; no framing needed here.
+    return cdc_acm_host_data_tx_blocking(cdc, data, len, timeout_ms);
+}
+
 esp_err_t usb_cdc_send_command(const char *cmd, char *reply, size_t reply_max,
                                size_t *reply_len, uint32_t timeout_ms)
 {
