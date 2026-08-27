@@ -7,6 +7,7 @@ idf_component_register(
         "sbf_parser.c"
         "cutfill.c"
         "gnss_state.c"
+        "leveler.c"
         "debug_console.c"
         "net_mdns.c"
         "board_power.c"

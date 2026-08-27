@@ -13,6 +13,7 @@
 #include "sdkconfig.h"
 
 #include "gnss_state.h"
+#include "leveler.h"
 #include "usb_cdc_source.h"
 #include "wifi_sta.h"
 #include "display.h"
@@ -75,6 +76,54 @@ static int cmd_sbf(int argc, char **argv)
         printf("RxStatus: uptime=%lus cpu=%u%% temp=%dC rx_error=0x%lX\n",
                (unsigned long)g.rxstatus.uptime_s, g.rxstatus.cpu_load_pct,
                g.rxstatus.temperature_c, (unsigned long)g.rxstatus.rx_error);
+    return 0;
+}
+
+static int cmd_survey(int argc, char **argv)
+{
+    if (argc >= 2) {
+        if (!strcmp(argv[1], "add")) {
+            printf(leveler_survey_add_current() ? "point added\n" : "no usable fix yet\n");
+        } else if (!strcmp(argv[1], "clear")) {
+            leveler_survey_clear();
+            printf("survey + plane cleared\n");
+        } else if (!strcmp(argv[1], "fit")) {
+            printf(leveler_fit_balance() ? "balance plane fitted (cut ~= fill)\n"
+                                         : "need >= 3 survey points\n");
+        } else {
+            printf("usage: survey [add|clear|fit]\n");
+        }
+        return 0;
+    }
+    leveler_status_t s;
+    leveler_get(&s);
+    const char *mode = s.mode == LEVELER_MODE_BALANCE ? "balance"
+                     : s.mode == LEVELER_MODE_FLAT    ? "flat" : "none";
+    printf("survey points=%lu  origin=%d  mode=%s\n",
+           (unsigned long)s.survey_points, s.has_origin, mode);
+    return 0;
+}
+
+static int cmd_flat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf(leveler_set_flat_here() ? "flat target set at current height\n"
+                                   : "no usable fix yet\n");
+    return 0;
+}
+
+static int cmd_cutfill(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    leveler_status_t s;
+    leveler_get(&s);
+    if (!s.have_delta) {
+        printf(s.mode == LEVELER_MODE_NONE ? "no target plane — run 'survey fit' or 'flat'\n"
+                                           : "no usable fix right now\n");
+        return 0;
+    }
+    const char *st = s.state > 0 ? "CUT" : s.state < 0 ? "FILL" : "ON GRADE";
+    printf("%s  delta=%+.3f m (%+.0f cm)\n", st, s.delta_m, s.delta_m * 100.0);
     return 0;
 }
 
@@ -270,6 +319,9 @@ static void register_cmds(void)
     const esp_console_cmd_t cmds[] = {
         { .command = "stats", .help = "SBF block/CRC counters + fix + staleness", .func = cmd_stats },
         { .command = "sbf",   .help = "decoded SBF: PVT/Att/DOP/RxStatus latest values", .func = cmd_sbf },
+        { .command = "survey", .help = "cut/fill survey: survey [add|clear|fit] (no arg = status)", .hint = "[add|clear|fit]", .func = cmd_survey },
+        { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
+        { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
         { .command = "usb",   .help = "USB host / CDC attach state",          .func = cmd_usb   },
         { .command = "mosaic", .help = "send a raw Septentrio command to the Mosaic + print reply", .hint = "<command>", .func = cmd_mosaic },
         { .command = "disp", .help = "fill the panel with a color (light-up test): disp <red|green|blue|white|black|hex> [bl%]", .hint = "[color] [bl%]", .func = cmd_disp },

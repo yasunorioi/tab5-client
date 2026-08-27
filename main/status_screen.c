@@ -17,6 +17,7 @@
 #include "lvgl.h"
 
 #include "gnss_state.h"
+#include "leveler.h"
 #include "usb_cdc_source.h"
 #include "wifi_sta.h"
 #include "gnss_view.h"
@@ -32,8 +33,10 @@ static const char *TAG = "status_ui";
 #define C_WARN    0xFFCC33
 #define C_BAD     0xFF5555
 #define C_IDLE    0x8899AA
+#define C_CUT     0xFF7744   // remove soil (ground above target)
+#define C_FILL    0x44AAFF   // add soil (ground below target)
 
-static lv_obj_t *s_fix, *s_att, *s_height, *s_wifi, *s_mosaic;
+static lv_obj_t *s_cutfill, *s_fix, *s_att, *s_height, *s_wifi, *s_mosaic;
 
 static lv_obj_t *mk_line(lv_obj_t *parent)
 {
@@ -63,10 +66,17 @@ static void build_ui(void)
                           LV_FLEX_ALIGN_START);
 
     lv_obj_t *title = lv_label_create(scr);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
-    lv_obj_set_style_pad_bottom(title, 28, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(C_IDLE), 0);
+    lv_obj_set_style_pad_bottom(title, 6, 0);
     lv_label_set_text(title, "TAB5 RTK LEVELER");
+
+    // The headline cut/fill readout — the number the operator actually watches.
+    s_cutfill = lv_label_create(scr);
+    lv_obj_set_style_text_font(s_cutfill, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(s_cutfill, lv_color_hex(C_IDLE), 0);
+    lv_obj_set_style_pad_bottom(s_cutfill, 24, 0);
+    lv_label_set_text(s_cutfill, "-- no plane");
 
     s_fix    = mk_line(scr);
     s_att    = mk_line(scr);
@@ -88,6 +98,29 @@ static void refresh_cb(lv_timer_t *t)
     gnss_state_snapshot(&g);
     int64_t age_ms = g.last_block_us ? (now - g.last_block_us) / 1000 : -1;
     bool fresh = (age_ms >= 0 && age_ms < 3000);
+
+    // Headline cut/fill readout.
+    leveler_status_t lv;
+    leveler_get(&lv);
+    if (lv.have_delta) {
+        double cm = lv.delta_m * 100.0;
+        if (lv.state > 0)
+            snprintf(buf, sizeof(buf), "CUT  %.0f cm", cm);        // grind down
+        else if (lv.state < 0)
+            snprintf(buf, sizeof(buf), "FILL %.0f cm", -cm);       // build up
+        else
+            snprintf(buf, sizeof(buf), "ON GRADE");
+        uint32_t cc = lv.state > 0 ? C_CUT : lv.state < 0 ? C_FILL : C_OK;
+        lv_obj_set_style_text_color(s_cutfill, lv_color_hex(cc), 0);
+        lv_label_set_text(s_cutfill, buf);
+    } else if (lv.mode != LEVELER_MODE_NONE) {
+        lv_obj_set_style_text_color(s_cutfill, lv_color_hex(C_IDLE), 0);
+        lv_label_set_text(s_cutfill, "-- no fix");
+    } else {
+        lv_obj_set_style_text_color(s_cutfill, lv_color_hex(C_IDLE), 0);
+        snprintf(buf, sizeof(buf), "-- survey %lu pts", (unsigned long)lv.survey_points);
+        lv_label_set_text(s_cutfill, buf);
+    }
 
     // Fix quality (mode + satellites), with CRC health folded into the colour.
     uint32_t col;

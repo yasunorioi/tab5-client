@@ -13,6 +13,7 @@
 #include "esp_netif.h"
 
 #include "gnss_state.h"
+#include "leveler.h"
 #include "usb_cdc_source.h"
 #include "nmea_source.h"
 #include "debug_console.h"
@@ -65,6 +66,7 @@ void app_main(void)
     // hardware, starting the console after it would leave the box mute. The REPL
     // runs on its own task, so it survives even if USB host bring-up hangs below.
     gnss_state_init();          // SBF parse target for the USB source (client data path)
+    leveler_init();             // cut/fill survey + balance plane (driven from PVT)
     debug_console_start();
 
     // Bring up the TCP/IP stack (tcpip thread + lwIP core) and the default event
