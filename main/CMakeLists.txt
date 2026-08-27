@@ -7,13 +7,10 @@ idf_component_register(
         "sbf_parser.c"
         "cutfill.c"
         "gnss_state.c"
-        "rtcm_sink.c"
-        "rtcm_monitor.c"
         "debug_console.c"
         "net_mdns.c"
         "board_power.c"
         "wifi_sta.c"
-        "upstream.c"
         "display.c"
         "backlight.c"
         "touch.c"
@@ -24,7 +21,7 @@ idf_component_register(
         "gnss_view.c"
         "web_server.c"
     INCLUDE_DIRS "."
-    REQUIRES console esp_timer mdns esp_driver_i2c ntripcaster esp_netif esp_event
+    REQUIRES console esp_timer mdns esp_driver_i2c esp_netif esp_event
              esp_wifi esp_wifi_remote nvs_flash lwip esp_http_server mbedtls
              esp_lcd esp_lcd_ili9881c esp_driver_ledc esp_lvgl_port esp_mm
 )

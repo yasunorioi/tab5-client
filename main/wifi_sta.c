@@ -22,15 +22,13 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 
-#include "caster.h"
-#include "upstream.h"
 #include "web_server.h"
 
 static const char *TAG = "wifi";
 
 #define NVS_NS "wifi"
 
-static bool s_caster_started;
+static bool s_services_started;
 
 // Live link snapshot for wifi_sta_status() (the status UI). Plain writes from
 // the event handler / bring-up task; a status read tolerates a torn field.
@@ -115,18 +113,15 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "got IP " IPSTR " — caster reachable on :2101 (rtk.local)",
+        ESP_LOGI(TAG, "got IP " IPSTR " — status UI reachable on :8080 (rtk.local)",
                  IP2STR(&e->ip_info.ip));
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_connected = true;
-        if (!s_caster_started) {
-            s_caster_started = true;
-            caster_start();
-            // Start pushing the base RTCM3 to the cloud caster (idles until
-            // provisioned via `upstreamset`). Independent of the local caster.
-            upstream_start();
+        if (!s_services_started) {
+            s_services_started = true;
             // Read-only status web UI (http://rtk.local:8080). De-gated: a failed
-            // httpd start is logged, never fatal — the caster must not depend on it.
+            // httpd start is logged, never fatal — the leveler UI on the panel and
+            // the SBF data path must not depend on it.
             esp_err_t web = web_server_start();
             if (web != ESP_OK) {
                 ESP_LOGW(TAG, "web_server_start failed (%s) — status UI unavailable",

@@ -1,19 +1,23 @@
 // status_screen.c — see status_screen.h.
+//
+// Client status page: fix quality, dual-antenna attitude, and ellipsoidal height
+// from the SBF stream, plus WiFi/Mosaic link state and the NMEA skyplot. The
+// large cut/fill readout replaces the height line once the survey/plane UX lands
+// (docs/todo.md — cut/fill display).
 
 #include "status_screen.h"
 #include "display.h"
 
 #include <string.h>
+#include <math.h>
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 
-#include "rtcm_monitor.h"
+#include "gnss_state.h"
 #include "usb_cdc_source.h"
-#include "caster.h"
-#include "upstream.h"
 #include "wifi_sta.h"
 #include "gnss_view.h"
 
@@ -29,12 +33,7 @@ static const char *TAG = "status_ui";
 #define C_BAD     0xFF5555
 #define C_IDLE    0x8899AA
 
-static lv_obj_t *s_caster, *s_rtcm, *s_gnss, *s_wifi, *s_cloud, *s_mosaic;
-
-// Rate state (frames/s, cloud KB/s) between refreshes.
-static uint64_t s_prev_frames;
-static uint64_t s_prev_up_bytes;
-static int64_t  s_prev_us;
+static lv_obj_t *s_fix, *s_att, *s_height, *s_wifi, *s_mosaic;
 
 static lv_obj_t *mk_line(lv_obj_t *parent)
 {
@@ -67,40 +66,16 @@ static void build_ui(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(C_TITLE), 0);
     lv_obj_set_style_pad_bottom(title, 28, 0);
-    lv_label_set_text(title, "TAB5 RTK BASE");
+    lv_label_set_text(title, "TAB5 RTK LEVELER");
 
-    s_caster = mk_line(scr);
-    s_rtcm   = mk_line(scr);
-    s_gnss   = mk_line(scr);
+    s_fix    = mk_line(scr);
+    s_att    = mk_line(scr);
+    s_height = mk_line(scr);
     s_wifi   = mk_line(scr);
-    s_cloud  = mk_line(scr);
     s_mosaic = mk_line(scr);
 
     // GNSS skyplot + C/N0 bars below the status lines (portrait has the room).
     gnss_view_build(scr);
-}
-
-// Build a compact present-constellations string from the monitor's type tally.
-static void gnss_string(const rtcm_mon_stats_t *m, char *buf, size_t n)
-{
-    static const struct { uint16_t type; char c; } msm7[] = {
-        {1077, 'G'}, {1087, 'R'}, {1097, 'E'}, {1127, 'C'},
-        {1107, 'S'}, {1117, 'J'}, {1137, 'I'},
-    };
-    size_t pos = 0;
-    buf[0] = '\0';
-    for (size_t k = 0; k < sizeof(msm7) / sizeof(msm7[0]); k++) {
-        bool present = false;
-        for (uint32_t i = 0; i < m->type_count; i++) {
-            if (m->types[i].type == msm7[k].type) { present = true; break; }
-        }
-        if (present && pos + 2 < n) {
-            if (pos) buf[pos++] = ' ';
-            buf[pos++] = msm7[k].c;
-            buf[pos] = '\0';
-        }
-    }
-    if (pos == 0) strlcpy(buf, "none", n);
 }
 
 static void refresh_cb(lv_timer_t *t)
@@ -108,34 +83,50 @@ static void refresh_cb(lv_timer_t *t)
     (void)t;
     char buf[96];
     int64_t now = esp_timer_get_time();
-    double dt = (s_prev_us && now > s_prev_us) ? (now - s_prev_us) / 1e6 : 1.0;
 
-    // Caster + rovers.
-    caster_source_stats_t cs;
-    caster_source_stats(&cs);
-    uint32_t col = cs.running ? (cs.source_present ? C_OK : C_WARN) : C_BAD;
-    snprintf(buf, sizeof(buf), "Caster  %s   rovers %u",
-             cs.running ? (cs.source_present ? "LISTEN" : "no src") : "DOWN",
-             cs.client_count);
-    set_line(s_caster, col, buf);
-
-    // RTCM rate + CRC health.
-    rtcm_mon_stats_t ms;
-    rtcm_monitor_get(&ms);
-    double rate = (ms.valid_frames >= s_prev_frames) ?
-                  (ms.valid_frames - s_prev_frames) / dt : 0.0;
-    int64_t age_ms = ms.last_frame_us ? (now - ms.last_frame_us) / 1000 : -1;
+    gnss_snapshot_t g;
+    gnss_state_snapshot(&g);
+    int64_t age_ms = g.last_block_us ? (now - g.last_block_us) / 1000 : -1;
     bool fresh = (age_ms >= 0 && age_ms < 3000);
-    col = fresh ? (ms.crc_fails == 0 ? C_OK : C_WARN) : C_BAD;
-    snprintf(buf, sizeof(buf), "RTCM   %.1f/s   CRCerr %llu",
-             rate, (unsigned long long)ms.crc_fails);
-    set_line(s_rtcm, col, buf);
 
-    // Constellations.
-    char g[32];
-    gnss_string(&ms, g, sizeof(g));
-    snprintf(buf, sizeof(buf), "GNSS   %s", g);
-    set_line(s_gnss, fresh ? C_OK : C_IDLE, buf);
+    // Fix quality (mode + satellites), with CRC health folded into the colour.
+    uint32_t col;
+    if (!fresh) {
+        col = C_BAD;
+        snprintf(buf, sizeof(buf), "Fix    no SBF");
+    } else if (g.pvt_valid) {
+        // RTK fixed(4)/float(5) or a fixed location(3) is a usable solution.
+        bool solved = (g.pvt.mode_type >= 3);
+        col = solved ? (g.crc_failed == 0 ? C_OK : C_WARN) : C_WARN;
+        snprintf(buf, sizeof(buf), "Fix    %s   sv %u",
+                 sbf_pvt_mode_str(g.pvt.mode_type), g.pvt.nr_sv);
+    } else {
+        col = C_WARN;
+        snprintf(buf, sizeof(buf), "Fix    waiting...");
+    }
+    set_line(s_fix, col, buf);
+
+    // Dual-antenna attitude (pitch/roll for the blade, heading for reference).
+    if (g.att_valid && !isnan(g.att.pitch_deg)) {
+        double hd = isnan(g.att.heading_deg) ? 0.0 : g.att.heading_deg;
+        snprintf(buf, sizeof(buf), "Att    P%+.1f  R%+.1f  H%.0f",
+                 g.att.pitch_deg, g.att.roll_deg, hd);
+        set_line(s_att, fresh ? C_OK : C_IDLE, buf);
+    } else {
+        set_line(s_att, C_IDLE, "Att    —");
+    }
+
+    // Ellipsoidal height + vertical accuracy (cut/fill readout lands here later).
+    if (g.pvt_valid && !isnan(g.pvt.height_m)) {
+        if (!isnan(g.pvt.v_accuracy_m))
+            snprintf(buf, sizeof(buf), "Height %.3f m  +/-%.0fcm",
+                     g.pvt.height_m, g.pvt.v_accuracy_m * 100.0);
+        else
+            snprintf(buf, sizeof(buf), "Height %.3f m", g.pvt.height_m);
+        set_line(s_height, fresh ? C_OK : C_IDLE, buf);
+    } else {
+        set_line(s_height, C_IDLE, "Height —");
+    }
 
     // WiFi.
     wifi_status_t w;
@@ -150,23 +141,6 @@ static void refresh_cb(lv_timer_t *t)
         set_line(s_wifi, C_IDLE, "WiFi   not set (wifiset)");
     }
 
-    // Cloud upstream.
-    upstream_status_t u;
-    upstream_status(&u);
-    if (u.connected) {
-        double kbs = (u.bytes_sent >= s_prev_up_bytes) ?
-                     (u.bytes_sent - s_prev_up_bytes) / dt / 1024.0 : 0.0;
-        snprintf(buf, sizeof(buf), "Cloud  /%s UP %.1fKB/s  rc%lu",
-                 u.mount, kbs, (unsigned long)u.reconnects);
-        set_line(s_cloud, C_OK, buf);
-    } else if (u.provisioned) {
-        snprintf(buf, sizeof(buf), "Cloud  /%s DOWN  rc%lu",
-                 u.mount, (unsigned long)u.reconnects);
-        set_line(s_cloud, C_WARN, buf);
-    } else {
-        set_line(s_cloud, C_IDLE, "Cloud  not set (upstreamset)");
-    }
-
     // Mosaic / USB.
     usb_cdc_status_t us;
     usb_cdc_source_status(&us);
@@ -179,10 +153,6 @@ static void refresh_cb(lv_timer_t *t)
     } else {
         set_line(s_mosaic, C_BAD, "Mosaic —  (no receiver)");
     }
-
-    s_prev_frames  = ms.valid_frames;
-    s_prev_up_bytes = u.bytes_sent;
-    s_prev_us      = now;
 
     gnss_view_update();   // skyplot + C/N0 bars from the NMEA snapshot
 }
