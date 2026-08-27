@@ -7,8 +7,10 @@
 補正は自前の Trimble BD982 基準局（`rtk.toiso.fit:2101/eniwa-bd982`）から NTRIP で取る。
 ブレードの油圧自動制御はスコープ外（表示のみ）。
 
-[tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の **clone** で、
-コードはまだ caster のまま。`upstream` remote で追跡している。
+[tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の **clone** から
+派生。caster 半分は削除済みで、USB→SBF→cut/fill の client データ経路 + NTRIP client
+まで実装され **ESP-IDF 5.4.4/esp32p4 でクリーンビルドする**（実機ブリングアップは未：
+`docs/todo.md` の 1 番）。`upstream` remote で tab5-caster を追跡している。
 
 ## 応答は日本語で
 

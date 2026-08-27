@@ -1,49 +1,50 @@
 # 次にやること
 
-## 0. 先に発注元と詰める（技術判断ではなく案件判断）
+## 済み（2026-08、ESP-IDF 5.4.4/esp32p4 でクリーンビルド）
 
-- [ ] **垂直精度 ±2cm で要求を満たすか。** レーザーレベラー（±5mm）とは別物である点の合意
+- [x] **SBF パーサ** — Python (`tools/parse_sbf.py`) + C (`main/sbf_parser.c`)。
+      `tools/sbf_selftest.c` が fixture を全数検証（354 blk / CRC-fail 0）
+- [x] **土量バランス平面 + cut/fill** — `main/cutfill.c`（最小二乗＝balance 平面）。
+      `tools/cutfill_selftest.c` が合成圃場で解析検証
+- [x] **caster 半分の削除** — rtcm_sink/rtcm_monitor/upstream/components/ntripcaster を
+      除去し client 化。Zig 依存も消滅
+- [x] **USB→SBF→cut/fill 配線** — `gnss_state`（SBF 状態ホルダ）+ `leveler`（survey/
+      plane/delta）。パネルに cut/fill 大表示、console に survey/flat/cutfill
+- [x] **毎起動プロビジョニング** — `setAttitudeOffset,90,0` + `setSBFOutput,…msec100`
+- [x] **PID 0x8231 / itf {0,2} 化**、NMEA を USB2(itf2) に
+- [x] **NTRIP client** — `main/ntrip_client.c`。基準局から RTCM3 を de-chunk して
+      受信機へ供給（console: ntrip/ntripset/ntripreset）
+- [x] upstream(tab5-caster) の共通ボード層バグ（VID/PID 重複・sweep 無限ループ）
 
-## 1. upstream（tab5-caster）側で先に直す
+## 0. 先に発注元と詰める（合意済み）
 
-fork 後に直すと二重メンテになるので、**共通のボード層バグは upstream で先に修正**する。
+- [x] 垂直精度 ±2cm で要求を満たすか → **±2cm で十分と合意**
 
-- [ ] `main/usb_cdc_source.c` と `main/nmea_source.c` に重複定義されている VID/PID を
-      共通ヘッダに括り出す
-- [ ] **sweep の無限ループバグ**: `usb_cdc_source.c` の sweep ループで
-      `cdc_acm_host_open` 失敗時に `sweep` を進めず `continue` するため、
-      存在しない itf に当たると無限リトライして他の itf に戻れない
-- [ ] README の「itf0 は両方向 silent」「CDC 3本 + MSC」は開発機1個体の実測値であって
-      一般則ではない旨を追記（[[docs/hardware-findings.md]] 参照）
+## 1. 実機ブリングアップ（最重要・未着手）
 
-## 2. tab5-client のコード整理
+**まだ実機に焼いていない。** ビルドは通るがランタイム未検証（TODO(hw) マーカー参照）。
 
-- [ ] caster 半分を削除: `main/rtcm_sink.*` / `main/rtcm_monitor.*` /
-      `components/ntripcaster` / `main/upstream.*`（client 版で書き直すので一旦削除）
-- [ ] `CMakeLists.txt` / `main/CMakeLists.txt` から Zig caster のビルド規則を除去
-- [ ] README を tab5-client のものに差し替え
+```
+. ~/esp/esp-idf/export.sh
+idf.py -p <PORT> flash monitor
+```
 
-## 3. 実装（この順序が効率的）
+- [ ] P3H が enumerate し、sweep が SBF を latch するか（`usb` / `stats` / `sbf`）
+- [ ] プロビジョニング（setAttitudeOffset + setSBFOutput）が `$R:` で通るか
+- [ ] 屋外で Fixed を得た状態で **pitch / roll の切り替わり**を確認
+      （`setAttitudeOffset,90,0` 済み。`AttEuler` の Pitch/Roll どちらが Do-Not-Use
+      でないか。docs/handoff.md #6）
+- [ ] `ReceiverStatus` の `rx_error`（屋内で 0x8/0x48 = `ERROR: SW,`）が屋外で消えるか
+- [ ] NTRIP client が接続し、fix が RTKFixed に上がるか（`ntrip` / `sbf`）
+- [ ] cut/fill: `survey add`×N → `survey fit`（or `flat`）→ パネルの CUT/FILL 表示
 
-**SBF パーサから始める。** 実バイト列を `tests/fixtures/mosaic-g5-p3h-sbf.bin` に
-コミットしてあるので、**受信機も ESP-IDF も無い状態で書けて全数検証できる**。
-ブロック定義と CRC は確定済み（docs/hardware-findings.md、tests/fixtures/README.md）。
-既存の検証スクリプト `tools/parse-sbf.ps1` が参照実装になる。
+## 2. UX / 機能の追加
 
-- [ ] SBF パーサ（PVTGeodetic 4007 rev2 / AttEuler 5938 rev0 / DOP 4001 rev0 /
-      ReceiverStatus 4014 rev1）。CRC-16-CCITT poly 0x1021 init 0、ID 以降に適用
-- [ ] 土量バランス平面の算出（純粋なロジックなのでオフラインで詰められる）
-- [ ] `usb_cdc_source.c` の双方向化（PID 0x8231 / itf {0,2}）
-- [ ] NTRIP client（**de-chunk 必須**。`esp_http_client` のストリーミングモード推奨）
-- [ ] 毎起動プロビジョニング（`setAttitudeOffset, 90, 0` + `setSBFOutput, ...`）
-- [ ] cut/fill 表示画面
-- [ ] microSD ロガー
+- [ ] **オンパネル touch ボタン**で survey add / fit / flat（今は console のみ）
+- [ ] microSD ロガー（PVT/Att + cut/fill を記録）
+- [ ] web ダッシュボードに NTRIP client 状態を出す（今は console のみ）
 
-## 4. 環境
-
-- [ ] **ESP-IDF 5.4.4 以降のインストール**（この PC には未導入）
-
-## 5. 基準局側（余裕のあるとき）
+## 3. 基準局側（余裕のあるとき）
 
 - [ ] BD982 が QZSS を出せるか確認。出せるなら `1114` を追加すれば
       rover 側は無改造でみちびきの恩恵を受ける

@@ -5,10 +5,15 @@
 
 [tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の対になる車載側。
 
-> ## ⚠ 現在の状態（2026-08-27）
+> ## 現在の状態（2026-08）
 >
-> **コードはまだ tab5-caster のまま。** 設計と実機実測だけが `docs/` に入っている段階。
-> 次にやることは [`docs/todo.md`](docs/todo.md) を見ること。
+> **client のコア実装まで完了し、ESP-IDF 5.4.4/esp32p4 でクリーンビルドする。**
+> caster 半分は削除済み。USB→SBF パース→cut/fill 表示（土量バランス平面）と、
+> 受信機へ補正を流す NTRIP client まで実装済み。**実機へのブリングアップは未検証**
+> （次にやることは [`docs/todo.md`](docs/todo.md) の 1 番）。
+>
+> 純ロジック層（SBF パーサ / cut/fill）は受信機も ESP-IDF も無しに
+> `tools/*_selftest.c` をホストの gcc でビルドして全数検証できる。
 >
 > このリポジトリは tab5-caster の **clone**（fork ボタンではない。GitHub の fork は
 > public repo を private にできないため）。upstream 追跡は残してある:
