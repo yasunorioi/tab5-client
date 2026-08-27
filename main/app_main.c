@@ -18,6 +18,7 @@
 
 #include "rtcm_sink.h"
 #include "rtcm_monitor.h"
+#include "gnss_state.h"
 #include "usb_cdc_source.h"
 #include "nmea_source.h"
 #include "debug_console.h"
@@ -55,20 +56,20 @@ static void rtcm_feed_task(void *arg)
             rtcm_upstream_push(buf, n);
         }
         if (xTaskGetTickCount() - last_log > pdMS_TO_TICKS(5000)) {
-            rtcm_mon_stats_t s;
-            rtcm_monitor_get(&s);
+            gnss_snapshot_t g;
+            gnss_state_snapshot(&g);
             usb_cdc_status_t u;
             usb_cdc_source_status(&u);
-            // Fold USB state into the periodic line so the box is diagnosable
-            // from any capture window without needing to catch the boot log
-            // (the USB-Serial-JTAG console drops one-shot events when unread).
+            // Fold USB + SBF state into the periodic line so the box is
+            // diagnosable from any capture window without needing to catch the
+            // boot log (the USB-Serial-JTAG console drops one-shot events).
+            const char *mode = g.pvt_valid ? sbf_pvt_mode_str(g.pvt.mode_type) : "-";
             ESP_LOGI(TAG, "usb[host=%d attach=%d open=%d %04X:%04X n=%u if[%s] "
-                     "cur=%d stream=%d] rx: %llu B, %llu RTCM3, %llu CRCfail",
+                     "cur=%d stream=%d] sbf: %lu blk, %lu CRCfail  fix=%s sv=%u",
                      u.host_installed, u.device_attached, u.cdc_open, u.vid, u.pid,
                      u.num_interfaces, u.topo, (int8_t)u.cur_itf, (int8_t)u.stream_itf,
-                     (unsigned long long)s.total_bytes,
-                     (unsigned long long)s.valid_frames,
-                     (unsigned long long)s.crc_fails);
+                     (unsigned long)g.valid_blocks, (unsigned long)g.crc_failed,
+                     mode, g.pvt_valid ? g.pvt.nr_sv : 0);
             last_log = xTaskGetTickCount();
         }
     }
@@ -85,6 +86,7 @@ void app_main(void)
     // hardware, starting the console after it would leave the box mute. The REPL
     // runs on its own task, so it survives even if USB host bring-up hangs below.
     rtcm_monitor_init();
+    gnss_state_init();          // SBF parse target for the USB source (client data path)
     debug_console_start();
 
     ESP_ERROR_CHECK(rtcm_sink_init());

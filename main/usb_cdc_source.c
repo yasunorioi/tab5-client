@@ -5,12 +5,12 @@
 // needed (VID/PID/interface, HS-OTG port + VBUS).
 //
 // Data flow:
-//   USB HS OTG  ->  cdc_acm_host data_cb  ->  rtcm_sink_push()  ->  StreamBuffer
+//   USB HS OTG  ->  cdc_acm_host data_cb  ->  gnss_state_feed()  ->  SBF parser
 //
 // Bring-up order (see README milestones):
 //   M0: device attaches, new_dev_cb logs VID/PID + every interface descriptor.
 //       Fill in MOSAIC_VID / MOSAIC_PID / MOSAIC_CDC_ITF from that log.
-//   M1: data_cb fires; hex dump shows RTCM3 preamble 0xD3 (rtcm_sink consumer).
+//   M1: data_cb fires; the SBF parser latches $@ sync + CRC-valid blocks.
 
 #include "usb_cdc_source.h"
 
@@ -25,9 +25,8 @@
 #include "usb/usb_helpers.h"     // usb_parse_next_descriptor_of_type
 #include "usb/cdc_acm_host.h"
 
-#include "rtcm_sink.h"
-#include "rtcm_monitor.h"   // valid-RTCM3 gate for the interface sweep
-#include "mosaic_config.h"  // push RTCM3 output config to the receiver on attach
+#include "gnss_state.h"     // client sink: USB bytes -> SBF parser (valid-block gate)
+#include "mosaic_config.h"  // push SBF output config to the receiver on attach
 #include "mosaic_usb.h"     // MOSAIC_VID / MOSAIC_PID (shared with nmea_source.c)
 
 static const char *TAG = "usb_cdc";
@@ -42,24 +41,26 @@ void usb_cdc_source_status(usb_cdc_status_t *out)
 }
 
 // ── Device identity ─────────────────────────────────────────────────────────
-// Confirmed on the bench (M0 attach log): Septentrio mosaic-go enumerates under
-// the Thesycon VID with three CDC-ACM COM ports + a USB mass-storage interface:
-//   itf 0/1 = COM #1 (comm proto 0xFF)   itf 2/3 = COM #2   itf 4/5 = COM #3
-//   itf 6   = MSC (internal disk)  — NO ECM/RNDIS network interface present.
-// Which COM carries RTCM3 is a receiver-config choice, so we SWEEP the three
-// comm-interface indices until one actually streams bytes (see cdc_task).
+// Client receiver (docs/hardware-findings.md): mosaic-go G5 P3H enumerates as
+// PID 0x8231 with only TWO CDC-ACM COMs and no mass-storage interface:
+//   itf 0/1 = USB1 (SBF stream, provisioned by mosaic_provision)
+//   itf 2/3 = USB2 (NMEA GGA+GSV for the on-panel GNSS view; opened by nmea_source)
+// Unlike the caster's bench unit, itf0 DOES answer commands here. Which COM
+// carries the SBF is still a config choice, so we SWEEP the comm interfaces and
+// latch the one that produces CRC-valid SBF blocks (see cdc_task).
 // MOSAIC_VID / MOSAIC_PID come from mosaic_usb.h (shared with nmea_source.c).
 
 // bInterfaceNumber of each CDC-ACM *communications* interface (the data
 // interface is the next one). cdc_acm_host_open()'s interface_idx is this
 // bInterfaceNumber (see cdc_host_descriptor_parsing.c: usb_parse_interface_
-// descriptor(config, intf_idx, 0, ...)).
-static const uint8_t MOSAIC_COM_ITFS[] = {0, 2, 4};
+// descriptor(config, intf_idx, 0, ...)). {0,2} for this P3H; the sweep now hops
+// off an un-openable itf, so listing a spare 4 would be harmless on other units.
+static const uint8_t MOSAIC_COM_ITFS[] = {0, 2};
 #define MOSAIC_SWEEP_DWELL_MS  6000   // wait this long for bytes before hopping
 #define MOSAIC_OPEN_RETRIES    3      // open retries before hopping off an un-openable itf
 
 // USB CDC ignores the real line rate, but the Mosaic virtual COM may honor it.
-// Set the Mosaic COM to match (RTCM3 MSM7 all-constellation @1Hz wants margin).
+// SBF @10Hz (~1.7 kB/s) is light; keep margin.
 #define MOSAIC_BAUD       460800
 
 static void usb_lib_task(void *arg)
@@ -179,13 +180,13 @@ static void cdc_event_cb(const cdc_acm_host_dev_event_data_t *event, void *user_
 }
 
 // Bytes seen since the current interface was opened — the sweep uses this to
-// decide whether the bound COM is the one actually streaming RTCM3.
+// decide whether the bound COM is the one actually streaming SBF.
 static volatile uint32_t s_rx_since_open;
 
 // Command-reply capture: while s_cmd_capture is set, cdc_data_cb tees a COPY of
 // every received byte into s_cmd_rx so usb_cdc_send_command() can read the
-// Mosaic's ASCII reply. The bytes still go to rtcm_sink as usual, so capturing
-// never interrupts a live stream.
+// Mosaic's ASCII reply. The bytes still go to the SBF parser as usual, so
+// capturing never interrupts a live stream.
 static StreamBufferHandle_t s_cmd_rx;
 static volatile bool        s_cmd_capture;
 
@@ -197,7 +198,7 @@ static bool cdc_data_cb(const uint8_t *data, size_t data_len, void *user_arg)
     if (s_cmd_capture && s_cmd_rx) {
         xStreamBufferSend(s_cmd_rx, data, data_len, 0);   // tee a copy; drop on full
     }
-    rtcm_sink_push(data, data_len);
+    gnss_state_feed(data, (uint32_t)data_len);   // USB bytes -> SBF parser
     return true;
 }
 
@@ -306,10 +307,10 @@ static void cdc_task(void *arg)
         cdc_acm_host_line_coding_set(cdc, &lc);
         cdc_acm_host_set_control_line_state(cdc, /*dtr=*/true, /*rts=*/true);
 
-        // Self-provision the receiver's RTCM3 output (flash-and-go). Sent once per
+        // Self-provision the receiver's SBF output (flash-and-go). Sent once per
         // attach on the first interface we open; the command targets USB1 by name,
         // so it applies no matter which COM this is — and on a factory-config
-        // Mosaic it's what makes USB1 start streaming for the sweep to latch.
+        // Mosaic it's what makes USB1 start streaming SBF for the sweep to latch.
         bool provisioned_here = false;
         if (!s_provisioned) {
             if (mosaic_provision() == ESP_OK) {
@@ -320,17 +321,16 @@ static void cdc_task(void *arg)
             }
         }
 
-        // Dwell: latch on VALID RTCM3, not just any bytes. One Mosaic COM streams
-        // NMEA @1Hz (confirmed on the bench), which would otherwise hijack the
-        // sweep. Watch the monitor's CRC-valid frame count for an advance; raw
-        // bytes alone (NMEA/echo) don't qualify. If nothing valid arrives, hop.
-        // When we JUST provisioned on this interface, dwell longer: the receiver
-        // takes a few seconds to (re)start its output after setRTCMv3Output, and
-        // this is very likely the data port (the ack came from it) — hopping away
-        // only to circle back wastes a full sweep before first latch.
+        // Dwell: latch on VALID SBF, not just any bytes. The other Mosaic COM
+        // streams NMEA, which would otherwise hijack the sweep. Watch the SBF
+        // parser's CRC-valid block count for an advance; raw bytes alone
+        // (NMEA/echo) don't qualify. If nothing valid arrives, hop. When we JUST
+        // provisioned on this interface, dwell longer: the receiver takes a few
+        // seconds to (re)start output after setSBFOutput, and this is very likely
+        // the data port (the ack came from it) — hopping away only to circle back
+        // wastes a full sweep before first latch.
         int dwell_ms = provisioned_here ? 15000 : MOSAIC_SWEEP_DWELL_MS;
-        rtcm_mon_stats_t base;
-        rtcm_monitor_get(&base);
+        uint32_t base_blocks = gnss_state_valid_blocks();
 
         bool disconnected = false;
         bool streaming = false;
@@ -339,9 +339,7 @@ static void cdc_task(void *arg)
                 disconnected = true;   // handle already closed by cdc_event_cb
                 break;
             }
-            rtcm_mon_stats_t now;
-            rtcm_monitor_get(&now);
-            if (now.valid_frames > base.valid_frames) { streaming = true; break; }
+            if (gnss_state_valid_blocks() > base_blocks) { streaming = true; break; }
         }
 
         if (disconnected) {
@@ -352,7 +350,7 @@ static void cdc_task(void *arg)
         }
         if (streaming) {
             s_status.stream_itf = itf;
-            ESP_LOGI(TAG, "*** valid RTCM3 on itf=%d (%lu raw B seen) — latched ***",
+            ESP_LOGI(TAG, "*** valid SBF on itf=%d (%lu raw B seen) — latched ***",
                      itf, (unsigned long)s_rx_since_open);
             xSemaphoreTake(s_disconnected, portMAX_DELAY);   // stay until unplug
             ESP_LOGW(TAG, "stream itf=%d disconnected, rescanning", itf);
@@ -361,9 +359,9 @@ static void cdc_task(void *arg)
             continue;
         }
 
-        // No valid RTCM3 in the dwell window. The raw-byte count distinguishes a
-        // truly silent COM (0 B) from non-RTCM3 chatter like NMEA (>0 B). Hop.
-        ESP_LOGW(TAG, "itf=%d no RTCM3 in %d ms (%lu raw B) — hopping",
+        // No valid SBF in the dwell window. The raw-byte count distinguishes a
+        // truly silent COM (0 B) from non-SBF chatter like NMEA (>0 B). Hop.
+        ESP_LOGW(TAG, "itf=%d no SBF in %d ms (%lu raw B) — hopping",
                  itf, MOSAIC_SWEEP_DWELL_MS, (unsigned long)s_rx_since_open);
         s_cdc = NULL;
         cdc_acm_host_close(cdc);

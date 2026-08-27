@@ -16,8 +16,9 @@
 
 static const char *TAG = "nmea";
 
-// Same composite device as the RTCM3 source; itf4 is the NMEA (USB2) COM.
-#define NMEA_ITF    4
+// Same composite device as the SBF source; on this P3H itf2 is USB2 (NMEA COM).
+// (The tab5-caster bench unit had a 3-COM layout where USB2 was itf4.)
+#define NMEA_ITF    2
 #define NMEA_BAUD   460800
 
 static SemaphoreHandle_t s_lock;

@@ -7,7 +7,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 
-#include "rtcm_monitor.h"
+#include "gnss_state.h"
 #include "touch.h"
 
 static const char *TAG = "backlight";
@@ -18,7 +18,7 @@ static const char *TAG = "backlight";
 #define BL_STEP         10   // climb increment per step
 #define BL_WARMUP_S     5    // healthy streaming seconds before the first climb
 #define BL_CLIMB_EVERY  3    // raise one step every N healthy seconds
-#define BL_FRESH_US     3000000  // RTCM3 "fresh" if a valid frame within 3 s
+#define BL_FRESH_US     3000000  // stream "fresh" if a valid SBF block within 3 s
 #define BL_TICK_US      1000000  // 1 Hz
 #define BL_IDLE_OFF_S   180      // blank the panel after this long untouched
 
@@ -45,16 +45,14 @@ static void tick(void *arg)
     (void)arg;
     if (s_manual) return;
 
-    rtcm_mon_stats_t ms;
-    rtcm_monitor_get(&ms);
     int64_t now = esp_timer_get_time();
 
-    // "Alive" = a CRC-valid RTCM3 frame arrived within the last few seconds.
-    // Staleness — not per-tick frame *advance* — is the brownout signal: a real
+    // "Alive" = a CRC-valid SBF block arrived within the last few seconds.
+    // Staleness — not per-tick block *advance* — is the brownout signal: a real
     // drop stops the stream, which goes stale. Requiring an advance every 1 Hz
-    // tick aliased against the ~1 Hz RTCM cadence and fired false brownouts even
+    // tick would alias against the block cadence and fire false brownouts even
     // while the stream was healthy, ratcheting the ceiling down to the floor.
-    bool alive = ms.last_frame_us && (now - ms.last_frame_us) < BL_FRESH_US;
+    bool alive = gnss_state_fresh(BL_FRESH_US);
 
     // Idle blank: after a spell with no touch, turn the panel off entirely
     // (it's a status display — nobody's watching). Any touch wakes it and
