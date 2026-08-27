@@ -1,318 +1,46 @@
-# tab5-caster
+# tab5-client
 
-NTRIP caster firmware for **M5Stack Tab5 (ESP32-P4)**, fed by a **Septentrio
-mosaic-go (mosaic-G5)** base receiver over **USB (CDC-ACM)**.
+**M5Stack Tab5 (ESP32-P4) + Septentrio mosaic-G5 P3H による、トラクター装着型
+均平作業機向けの RTK 切土/盛土表示機。**
 
-Sellable, flash-and-go RTK base box: Mosaic + Tab5 in one USB-C cable, no jumper
-wiring. Runs a local NTRIP caster so rovers (auto-steer tractors, RTK drones)
-keep getting corrections **even when the internet is down** — the offline-autonomy
-reason the box exists. FKP / network-RTK synthesis is done in the **cloud**, not
-on this box.
+[tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の対になる車載側。
 
-> **Status: gold-standard + turnkey verified on real hardware (2026-08).**
-> A cold P4 boot self-resets the onboard C6, joins WiFi, auto-starts the caster,
-> and a network NTRIP client pulls live multi-constellation RTCM3 (MSM7 + 1006/
-> 1033/1230) straight from an attached Mosaic — no operator interaction, no
-> external tools. Builds for `esp32p4` on ESP-IDF **5.4.4**.
+> ## ⚠ 現在の状態（2026-08-27）
+>
+> **コードはまだ tab5-caster のまま。** 設計と実機実測だけが `docs/` に入っている段階。
+> 次にやることは [`docs/todo.md`](docs/todo.md) を見ること。
+>
+> このリポジトリは tab5-caster の **clone**（fork ボタンではない。GitHub の fork は
+> public repo を private にできないため）。upstream 追跡は残してある:
+>
+> ```
+> git remote -v
+>   upstream  https://github.com/yasunorioi/tab5-caster.git
+> ```
 
-## Why USB and not UART
+## ドキュメント
 
-UART (3.3V TTL, 3 wires) is the technically shortest path and needs almost no
-firmware. USB was chosen anyway because a single USB-C cable is the right
-**product** experience for a flash-and-go kit. The cost is this driver: the P4
-must act as a USB **Host** and speak CDC-ACM to the Mosaic's composite device.
+| | |
+|---|---|
+| [`docs/hardware-findings.md`](docs/hardware-findings.md) | **実機実測メモ。** P3H の USB 列挙・permission・SBF 構成、キャスターの実接続検証。すべて一次情報 |
+| [`docs/design.md`](docs/design.md) | 設計方針、決定事項、tab5-caster からの組み替え、リスク |
+| [`docs/todo.md`](docs/todo.md) | 次にやること |
+| [`notes/memory/`](notes/memory/) | 作業メモの退避 |
 
-## Architecture
+## 押さえておくべき3点
 
-```
- Mosaic-go ── USB-A (P4 = HS-OTG Host, CDC-ACM) ──┐
-                                                   ▼
- usb_cdc_source.c  (sweep 3 COMs, CRC-latch the one streaming RTCM3)
-        │  data_cb
-        ▼
- rtcm_sink (StreamBuffer)
-        │
-        ▼
- rtcm_feed_task  ── the ONE reader ──┬─► rtcm_monitor  (CRC-24Q tally: stats/rtcm)
-                                     └─► rtcm_caster_push ─► caster tee buffer
-                                                                 │
- Zig ntripcaster (embedded, lwip backend) ── rtcm_caster_read ──┘
-        │  serves :2101 /MOSAIC
-        ▼
- C6 WiFi (ESP-Hosted/SDIO) ── rover pulls RTCM3 over the LAN
-```
+1. **この P3H は rover 専用で RTCM3 を出力できない。** permission に `RTKBase` が無く、
+   コマンドツリーに RTCM3 出力が存在しない。基準局には使えない
+   → 補正は自前の BD982（`rtk.toiso.fit:2101/eniwa-bd982`）から取る
 
-The **StreamBuffer seam** (`rtcm_sink`) decouples the USB byte source from the
-caster: the USB driver's only contract is "push RTCM3 bytes." Because the monitor
-and the caster would otherwise both read the same StreamBuffer (and race), a
-single `rtcm_feed_task` is the **only** reader — it tees the bytes to the monitor
-and to a second buffer the caster drains.
+2. **USB PID は `0x8231`、CDC COM は2本（USB1=itf0 / USB2=itf2）。**
+   tab5-caster のハードコード（`0x85C0`、itf `{0,2,4}`）とは違う。
+   加えて sweep ループに、存在しない itf で無限リトライするバグがある
 
-**Boot order matters (offline autonomy).** `app_main` brings up the USB→caster
-core *before* WiFi, and WiFi runs on its own task. The C6 radio is a coprocessor
-reached over SDIO; `esp_wifi_init()` blocks (retrying the ESP-Hosted transport)
-if the C6 doesn't answer, so gating the caster behind it would let a WiFi-only
-fault brick the box — exactly the opposite of the offline-autonomy promise.
+3. **NTRIP キャスターは `Transfer-Encoding: chunked` で返す。**
+   素通しすると RTCM3 に chunk ヘッダが混入して CRC がランダムに落ちる
 
-## The three things that will bite (read before hacking)
+## 精度についての注意
 
-1. **The RTCM COM is discovered, not fixed.** On the bench the Mosaic enumerates
-   as **3 CDC-ACM COMs (itf 0/1, 2/3, 4/5) + a USB mass-storage interface (itf6)**
-   — *no* ECM/RNDIS network interface. Which COM carries RTCM3 is a receiver-config
-   choice (itf0 was silent, itf4 was an NMEA decoy, itf2 was RTCM3), so the driver
-   **sweeps the three comm interfaces and latches the one whose bytes pass CRC-24Q**
-   (NMEA is auto-skipped). The box also **self-provisions the RTCM3 output** on
-   boot (see *Self-provisioning* below), so you no longer have to configure the
-   Mosaic by hand — but note only **USB1 (itf2)** answers commands; the first COM
-   (itf0) is silent both ways, so provisioning is attempted per-swept-interface
-   until one acks.
-2. **USB-A VBUS is gated by an I/O expander.** The 5V rail on the USB-A host port
-   is switched by PI4IOE5V6408 #2 (I²C `0x44`, P3 = USB5V_EN, active-high) — see
-   `board_power.c`. Without driving it the Mosaic is only trickle-powered and its
-   D+ pull-up never rises, so it never enumerates. **Brownout is real:** the panel
-   backlight shares this rail, and at full brightness a soft PC-USB supply + Mosaic
-   streaming load sags it enough to drop the receiver off the bus (`CDC error`, no
-   RTCM3). `backlight.c` mitigates this by holding brightness low until the stream
-   is up and only climbing as far as the supply sustains (see M3-C) — but a stiff
-   5V/2A source is still the right answer in the field.
-3. **CDC-ACM host is callback-driven, not a POSIX fd** — hence the StreamBuffer
-   instead of wrapping it as an `io.Stream` directly on the USB side.
-
-## Self-provisioning the Mosaic (flash-and-go)
-
-`mosaic_config.c` pushes the box's canonical RTCM3 base-station output config to
-the receiver on every boot, so a Mosaic with *any* saved state (even factory)
-starts streaming what the caster/FKP need — no operator config step. It sends one
-Septentrio command over the CDC command channel:
-
-```
-setRTCMv3Output, USB1, RTCM1006+RTCM1033+RTCM1230
-                     + RTCM1077+RTCM1087+RTCM1097+RTCM1107+RTCM1117+RTCM1127+RTCM1137   (MSM7, all GNSS)
-                     + RTCM1019+RTCM1020+RTCM1042+RTCM1044+RTCM1046                      (eph: GPS/GLO/BDS/QZSS/GAL)
-```
-
-Design notes, all verified on hardware via the `mosaic` passthrough:
-
-- **Current config only, never boot config.** Applied to the receiver's RAM, not
-  saved with `exeCopyConfigFile` — the box stays the source of truth and the
-  Mosaic's NVM (and its flash endurance) is left alone. The box re-applies each
-  power-up.
-- **Sent per-swept-interface until one acks.** `USB1` (itf2) accepts commands and
-  acks with `$R:`; itf0 is silent both ways (returns nothing → `ESP_ERR_TIMEOUT`
-  → retry on the next interface). The command targets `USB1` *by name*, so it
-  applies regardless of which COM carried it.
-- **Longer dwell right after a successful provision.** `setRTCMv3Output` restarts
-  the port's output; the stream reappears ~2.5 s later. The interface we just
-  acked on is almost certainly the data port, so we dwell 15 s (not 6 s) to catch
-  it instead of hopping away and circling back a full sweep.
-- **Best-effort, with fallback.** If provisioning fails, the box falls back to
-  whatever the Mosaic was already configured to stream. It never bricks the link.
-
-Verify with `rtcm`: after a cold boot the histogram shows MSM7 for every
-constellation plus `1019/1020/1042/1044/1046` — with no manual Mosaic setup.
-
-## WiFi via the onboard ESP32-C6 (ESP-Hosted)
-
-The P4 has no radio; the onboard **C6** does WiFi, reached over **SDIO** with
-`esp_hosted` + `esp_wifi_remote` (the C6 runs a version-matched ESP-Hosted slave
-firmware). Provisioning is over the USB console — `wifiset <ssid> [pass]` saves to
-NVS and reboots; on `GOT_IP` the caster auto-starts. (SoftAP/BLE field
-provisioning is a `TODO`: SoftAP over ESP-Hosted is an upstream-broken area.)
-
-**C6 reset is self-contained — no external tool needed.** The P4 resets the C6
-via **GPIO15** (ESP-Hosted, active-low). The C6's **IO9 boot strap is not wired to
-any P4 GPIO**, but the board holds it high with a **10K pull-up (R91 → WLAN_3.3V)**,
-so a bare GPIO15 EN pulse always boots the C6 *application* (SDIO slave). A cold P4
-boot therefore brings the C6 up on its own.
-
-> **Product note — leave the C6_ISP header (J1) unpopulated in the field.** J1
-> breaks out C6 EN (pin3) and IO9 (pin5). An M5 ESP32 Downloader left plugged in,
-> even with its port idle, drags IO9 low via DTR/RTS (overriding the weak R91) and
-> forces the C6 into download mode on every reset — the SDIO card enumerates but
-> the ESP-Hosted transport never connects (`Not able to connect with slave`). This
-> dev-rig artifact, not any firmware defect, was behind the earlier "C6 needs a
-> downloader EN-reset" episodes. Unplug the downloader and GPIO15 self-reset works.
-
-## Debugging
-
-On-device REPL over the console (USB-Serial-JTAG, same USB-C port as
-`idf.py monitor`). Type `help`; commands:
-
-| cmd | what |
-|-----|------|
-| `stats` | byte count, CRC-valid frame count, CRC fails, ms since last good frame |
-| `rtcm`  | monitor's message-type histogram — shows obs (`1005/1077/1087/1097`) + ephemeris (`1019/1020/1042/1046`) presence |
-| `dump [n]` / `raw` | hexdump of the last CRC-valid frame / last raw bytes (spot NMEA decoys) |
-| `usb`   | USB host installed? device attached? CDC open? attached VID/PID + per-itf topology |
-| `mosaic <cmd>` | send a raw Septentrio command to the Mosaic + print the reply (e.g. `mosaic getRTCMv3Output`) — how the provisioning syntax was verified live |
-| `caster` | start the Zig ntripcaster (listener + local source) manually |
-| `csource` | caster's `/MOSAIC` source state (bytes/types via the tee) |
-| `wifiset <ssid> [pass]` / `wifireset` | set / erase WiFi creds in NVS (reboots) |
-| `upstreamset <host> <port> <mount> <pass>` / `upstream` / `upstreamreset` | set / show / erase cloud-upstream creds in NVS |
-| `webadmin <user> <pass>` / `webadminreset` | set / erase the Basic-auth creds for the `/admin` web config (see below) |
-
-The periodic 5s log line folds USB state (`usb[host= attach= open= VID:PID
-stream=…]`) + rx counters into `idf.py monitor`, so the box is diagnosable from
-any capture window without catching one-shot boot events.
-
-**Admin web credentials — there is no default.** The `/admin` config page and
-its `POST /admin/*` writes are gated by HTTP Basic auth, and **every write
-returns `503` until you set a password** with `webadmin <user> <pass>` on the
-console (stored in NVS, never hardcoded — deliberately *not* published here, so a
-flashed box isn't shipped with a known credential). `webadminreset` disables the
-writes again. The read-only status (`GET /` and `/api/status`) needs no auth.
-
-`rtcm_monitor.c` validates **CRC-24Q**, so `valid_frames` means real RTCM3, not
-stray `0xD3` bytes. It's a permanent diagnostic tap — keep it after the caster.
-
-## Milestones
-
-- **M0 — enumerate. ✅** Mosaic attaches (`152A:85C0`), VBUS gate driven, per-itf
-  topology logged.
-- **M1 — bytes flow. ✅** Sweep + CRC-latch itf2; CRC-valid multi-GNSS RTCM3.
-- **M2 — caster. ✅** Zig `ntripcaster` embedded (lwip backend) fed from the sink
-  tee; `/MOSAIC` source ingests live RTCM3.
-- **M2.5 — turnkey. ✅** C6 WiFi self-reset on cold boot → STA join → caster
-  auto-start → network NTRIP client pulls live RTCM3 end-to-end, no operator input.
-- **M3-A — cloud upstream. ✅** Outbound NTRIP push of the base RTCM3 to the
-  cloud caster (`/TAB5`), exp-backoff reconnect; `upstreamset` creds in NVS.
-  Speaks **NTRIP v2 (HTTP POST + Basic auth)** by default and auto-falls back to
-  the legacy **v1 SOURCE** line if the caster doesn't answer HTTP (`upstream`
-  shows `streaming (v2)` / `(v1)`).
-- **M3-eph — ephemeris + self-provisioning. ✅** The box configures the Mosaic's
-  RTCM3 output itself on boot (MSM7 + 1006/1033/1230 + eph 1019/1020/1042/1044/
-  1046), verified from a no-eph receiver back to full eph with no manual setup.
-- **M3-B — UI. ✅** Tab5 MIPI-DSI status panel (720x1280 ST7123/ILI9881C
-  auto-detect) with an LVGL status page — caster/rover count, RTCM rate + CRC +
-  constellations, WiFi/IP, cloud upstream — refreshed 1 Hz. De-gated: a panel or
-  UI fault can't stall the caster.
-- **M3-C — power-aware panel. ✅** The panel LED string and the Mosaic's USB-A 5V
-  share a supply, so a fixed-brightness backlight browned the receiver off the
-  bus (no RTCM3) on a thin supply — a latent M3-B regression. `backlight.c` now
-  holds a safe floor until RTCM3 streams, then climbs toward target only as the
-  supply proves it can sustain it, learning a session ceiling on any real (stale)
-  stream drop — auto-calibrating, no hard cap. Plus idle-off: the ST7123 touch
-  (@0x55, 10 Hz activity poll) blanks the panel after 3 min untouched and wakes
-  it on a tap; the RTCM3 stream keeps flowing at 0% backlight while blanked.
-- **M3-D — GNSS view. ✅** A second read-only CDC interface (itf4 = USB2) parses
-  the Mosaic's GGA + GSV (self-provisioned alongside RTCM3), never touching the
-  caster path. `gnss_view.c` renders it: a skyplot (horizon + 30°/60° rings +
-  N/E/S/W, a constellation-coloured dot per satellite) and a C/N0 bar strip with
-  per-bar PRN labels. Dots/bars are absolute-positioned — a per-tick flex
-  relayout of ~30 bars tripped the LVGL task watchdog.
-- **M3-E — status web server. ✅** A **read-only** HTTP server (`web_server.c`,
-  esp_http_server on `:8080`, the port already advertised over `_http._tcp`)
-  serves `GET /api/status` (JSON) and `GET /` (a self-contained dashboard). Both
-  are built from the same live accessors the LVGL panel uses
-  (`wifi_sta_status` / `usb_cdc_source_status` / `upstream_status` /
-  `rtcm_monitor_get` / `caster_source_stats`), so the server holds no state — the
-  page computes RTCM rate from successive polls. De-gated like the panel: it
-  starts on `GOT_IP` alongside the caster and a failure to start never stalls it.
-  No config writes — it cannot touch the caster path. Verified on hardware:
-  `http://rtk.local:8080/` after a turnkey boot.
-- **M3-F — admin config (writes). ✅** A `/admin` page (and `POST /admin/*` API)
-  to reconfigure the box from a browser: cloud-upstream creds (= `upstreamset`,
-  no reboot), a Mosaic Septentrio-command passthrough (= the `mosaic` console
-  cmd), WiFi creds, and reboot. All writes are guarded by **HTTP Basic auth**
-  whose creds live in NVS (`webadmin` / `webadminreset` console cmds); until a
-  password is set every write returns **503**, so a box on an open field LAN
-  can't be reconfigured out of the box. Endpoints sit under `/admin/` so the
-  browser reuses the cached Basic creds for the page's `fetch()` POSTs; the
-  read-only `GET /` + `/api/status` stay open; passwords are never echoed in any
-  GET. Reboot-bearing writes (WiFi, reboot) send their response first, then
-  `esp_restart()` from a deferred task. Note: web WiFi config only helps while
-  the box is already reachable — first-join provisioning stays console/BLE.
-
-## Discovery (mDNS)
-
-`net_mdns.c` advertises the box as **`rtk.local`** with `_ntrip._tcp` (caster) and
-`_http._tcp` (status UI on `:8080`, served by `web_server.c` — see M3-E), so a
-field rover / laptop finds it by name. It becomes reachable once the C6 netif is
-up. Per-unit unique hostnames (`rtk-<serial>`) are a product TODO to avoid
-`.local` collisions on a shared LAN.
-
-## Build (on a machine with ESP-IDF 5.4+)
-
-The firmware links the Zig **[ntripcaster](https://github.com/yasunorioi/ntripcaster)**,
-which is **not vendored here** — clone it as a sibling at `~/ntripcaster` first
-(the build reads `$HOME/ntripcaster`; a Zig toolchain is required):
-
-```sh
-git clone https://github.com/yasunorioi/ntripcaster ~/ntripcaster
-idf.py set-target esp32p4
-idf.py build flash monitor      # flash over the USB-C port (USB-Serial-JTAG)
-```
-
-The Zig caster is cross-compiled into `components/ntripcaster/` by the IDF build
-(`zig build caster-lib -Dio-backend=lwip …`); its CMake rule re-runs when any
-`~/ntripcaster/src/*.zig` changes.
-
-## Field reconnect test (#3)
-
-The reconnect state machines (WiFi STA, cloud upstream, Mosaic re-latch) are
-verified on the bench with the `wifidrop` / `upstreamdrop` console hooks; the
-same hooks reproduce the scenarios in the field, where the real stressors live
-(Starlink IPv6 rotation, long-range WiFi under weather, generator/contactor EMI).
-
-Open the console over the USB-C port (`idf.py monitor`, or any serial term at
-115200) and confirm the baseline first:
-
-```
-wifi        # connected=1, has an IP
-upstream    # connected=1, streaming, note the reconnects count
-stats       # valid_frames rising, crc_fails=0
-```
-
-Then exercise each path and watch it recover:
-
-```
-upstreamdrop   # cloud SOURCE socket closed → backoff reconnect
-               #   expect: "connected … /TAB5 — streaming", reconnects +1
-wifidrop       # STA disassociated → auto-reconnect
-               #   expect: "disconnected — reconnecting" → "got IP" (~seconds)
-```
-
-After either drop — and after any real outage — `stats` must keep advancing
-(the RTCM3 core streams throughout) and a rover must be able to `GET /MOSAIC`
-again (the caster listener survives the reconnect).
-
-**Mount reclaim is now immediate (was ~30–45 s).** After a reboot or a WiFi
-drop, the cloud caster still holds the box's previous `/TAB5` connection as a
-half-open zombie. The caster now treats an **authenticated reconnect as a
-takeover**: because a mount is one base by design, a new SOURCE/POST whose
-password checks out evicts the stale connection as soon as it has been idle past
-a short grace (`SOURCE_TAKEOVER_IDLE_MS`, 3 s in
-[ntripcaster](https://github.com/yasunorioi/ntripcaster)) instead of waiting out
-the old 30 s stale timer. Since a reboot/reconnect already exceeds that grace,
-the box reclaims `/TAB5` on its first attempt — no more `Mount already in use`
-backoff. (A *live* source streaming at 1 Hz keeps its idle under the grace, so
-two bases misconfigured onto one mount still can't flap-evict each other.)
-
-For the stressors that only the field exercises, leave the box deployed and
-poll `upstream` / `wifi` / `stats` over hours — a climbing `reconnects` with the
-stream still healthy is the link recovering as designed; a stalled `stats` with
-a stuck backoff is the thing to capture.
-
-## Related
-
-- **[ntripcaster](https://github.com/yasunorioi/ntripcaster)** — the Zig caster
-  the firmware links (clone to `~/ntripcaster`). The `io.Stream`/`io.Address` +
-  `os.*` thread/sync backend seam and `-Dio-backend=posix|lwip` add the
-  `embedded.zig` C-ABI entry the firmware links.
-
-## License
-
-Licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option. Third-party components (the Espressif ST7123 driver and the
-M5Stack panel init tables) retain their upstream licenses — see [NOTICE](NOTICE).
-
-**Built firmware is GPLv2.** The firmware statically links
-[ntripcaster](https://github.com/yasunorioi/ntripcaster) (a rewrite of BKG
-NtripCaster 0.1.5, **GPLv2**). This repository's own sources are dual
-MIT/Apache-2.0, but a *compiled binary* that links ntripcaster is a combined
-work under GPLv2 — distributing a pre-flashed product requires providing the
-corresponding source (GPLv2). Building it yourself for personal use does not.
+RTK の垂直誤差は水平の約2倍で **実効 ±2cm 程度**。
+**レーザーレベラー（±5mm）とは別物。** 案件の要求仕様と要突き合わせ。
