@@ -20,23 +20,25 @@
 
 - [x] 垂直精度 ±2cm で要求を満たすか → **±2cm で十分と合意**
 
-## 1. 実機ブリングアップ（最重要・未着手）
+## 1. 実機ブリングアップ
 
-**まだ実機に焼いていない。** ビルドは通るがランタイム未検証（TODO(hw) マーカー参照）。
+**2026-08 に実機で確認済み**（Tab5 + P3H、`/dev/ttyACM0`、`idf.py flash`）:
 
-```
-. ~/esp/esp-idf/export.sh
-idf.py -p <PORT> flash monitor
-```
+- [x] P3H が enumerate（`152A:8231` / itf `[0,1,2,3]` = CDC×2）し itf0 に SBF latch
+- [x] プロビジョニング成功（SBF が流れている＝setSBFOutput 適用済み）
+- [x] SBF パース **crc_fails=0**（実機で 2000+ blocks / 失敗ゼロ）
+- [x] NTRIP client 接続 → **RTK fixed** 到達（hAcc=0.020 / vAcc=0.040 m）
+- [x] cut/fill 実データ動作（`flat` → `cutfill` = ON GRADE、静止で ±数cm）
 
-- [ ] P3H が enumerate し、sweep が SBF を latch するか（`usb` / `stats` / `sbf`）
-- [ ] プロビジョニング（setAttitudeOffset + setSBFOutput）が `$R:` で通るか
-- [ ] 屋外で Fixed を得た状態で **pitch / roll の切り替わり**を確認
-      （`setAttitudeOffset,90,0` 済み。`AttEuler` の Pitch/Roll どちらが Do-Not-Use
-      でないか。docs/handoff.md #6）
-- [ ] `ReceiverStatus` の `rx_error`（屋内で 0x8/0x48 = `ERROR: SW,`）が屋外で消えるか
-- [ ] NTRIP client が接続し、fix が RTKFixed に上がるか（`ntrip` / `sbf`）
-- [ ] cut/fill: `survey add`×N → `survey fit`（or `flat`）→ パネルの CUT/FILL 表示
+残り（デュアルアンテナ + 屋外が要る）:
+
+- [ ] **pitch / roll の切り替わり**。ベンチでは `AttEuler` が Do-Not-Use（姿勢は
+      2アンテナ収束が要る）。屋外で `AttEuler` の Pitch/Roll どちらが有効か確認
+      （`setAttitudeOffset,90,0` 済み。docs/handoff.md #6）
+- [ ] `ReceiverStatus` の `rx_error`（ベンチで 0x8 = `ERROR: SW,`）が
+      2アンテナ屋外で消えるか
+- [ ] 実圃場で `survey add`×N（走行して複数点）→ `survey fit`（balance 平面）→
+      パネルの CUT/FILL 表示
 
 ## 2. UX / 機能の追加
 
