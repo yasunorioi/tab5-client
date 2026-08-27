@@ -1,3 +1,4 @@
 - [mosaic-G5 P3H は rover 専用](mosaic-g5-p3h-rover-only.md) — RTCM3 を出力できない。PID 0x8231、CDC は2本のみ
 - [tab5-caster のハード依存箇所](tab5-caster-hw-quirks.md) — VID/PID と itf 番号のハードコード、sweep の無限ループバグ
 - [均平作業機 RTK 表示機の案件](tab5-leveling-rover.md) — Tab5 + P3H の rover 版。決定事項と実測した SBF 構成
+- [tab5-client リポジトリ](tab5-client-repo.md) — ローカル/リモートの場所と private + upstream 追跡の構成

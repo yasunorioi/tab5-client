@@ -25,8 +25,10 @@ fork 後に直すと二重メンテになるので、**共通のボード層バ�
 
 ## 3. 実装（この順序が効率的）
 
-**SBF パーサから始める。** 実バイト列が取得済みなので **ESP32 に焼く前に PC 上で
-全数検証できる**。ブロック定義と CRC は確定済み（docs/hardware-findings.md）。
+**SBF パーサから始める。** 実バイト列を `tests/fixtures/mosaic-g5-p3h-sbf.bin` に
+コミットしてあるので、**受信機も ESP-IDF も無い状態で書けて全数検証できる**。
+ブロック定義と CRC は確定済み（docs/hardware-findings.md、tests/fixtures/README.md）。
+既存の検証スクリプト `tools/parse-sbf.ps1` が参照実装になる。
 
 - [ ] SBF パーサ（PVTGeodetic 4007 rev2 / AttEuler 5938 rev0 / DOP 4001 rev0 /
       ReceiverStatus 4014 rev1）。CRC-16-CCITT poly 0x1021 init 0、ID 以降に適用

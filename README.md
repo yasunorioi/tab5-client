@@ -22,10 +22,23 @@
 
 | | |
 |---|---|
+| [`CLAUDE.md`](CLAUDE.md) | **作業コンテキスト。** 踏んではいけない罠がまとまっている。最初に読む |
+| [`docs/todo.md`](docs/todo.md) | 次にやること |
+| [`docs/handoff.md`](docs/handoff.md) | **別のマシンで作業を始める手順。** clone からフィクスチャ検証、実機の繋ぎ方まで |
 | [`docs/hardware-findings.md`](docs/hardware-findings.md) | **実機実測メモ。** P3H の USB 列挙・permission・SBF 構成、キャスターの実接続検証。すべて一次情報 |
 | [`docs/design.md`](docs/design.md) | 設計方針、決定事項、tab5-caster からの組み替え、リスク |
-| [`docs/todo.md`](docs/todo.md) | 次にやること |
+| [`tests/fixtures/`](tests/fixtures/) | **実機から採取した本物のバイト列。** 受信機もキャスターも ESP-IDF も無い環境でパーサを全数検証できる |
+| [`tools/`](tools/) | 受信機との対話・採取・CRC 検証スクリプト（PowerShell） |
 | [`notes/memory/`](notes/memory/) | 作業メモの退避 |
+
+## 実機が無くても始められる
+
+```
+pwsh .	ools\parse-sbf.ps1   -Path .	estsixtures\mosaic-g5-p3h-sbf.bin -Seconds 12.01
+pwsh .	ools\parse-rtcm3.ps1 -Path .	estsixtures\eniwa-bd982-rtcm3.bin -Seconds 8
+```
+
+どちらも CRC 失敗ゼロ・パディング無しで通る。SBF パーサはこれで完全に検証できる。
 
 ## 押さえておくべき3点
 
