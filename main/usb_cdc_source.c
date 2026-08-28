@@ -50,12 +50,13 @@ void usb_cdc_source_status(usb_cdc_status_t *out)
 // latch the one that produces CRC-valid SBF blocks (see cdc_task).
 // MOSAIC_VID / MOSAIC_PID come from mosaic_usb.h (shared with nmea_source.c).
 
-// bInterfaceNumber of each CDC-ACM *communications* interface (the data
-// interface is the next one). cdc_acm_host_open()'s interface_idx is this
-// bInterfaceNumber (see cdc_host_descriptor_parsing.c: usb_parse_interface_
-// descriptor(config, intf_idx, 0, ...)). {0,2} for this P3H; the sweep now hops
-// off an un-openable itf, so listing a spare 4 would be harmless on other units.
-static const uint8_t MOSAIC_COM_ITFS[] = {0, 2};
+// bInterfaceNumber of the CDC *communications* interface carrying SBF. On this
+// P3H that is USB1 = itf0, and ONLY itf0 — itf2 (USB2) is the NMEA port that
+// nmea_source opens for the skyplot. The old sweep also tried itf2, so whenever
+// itf0 went quiet the sweep hopped onto itf2 and collided with nmea_source's
+// claim ("EP already allocated"), wedging the USB host. SBF lives on itf0, so we
+// stay there and just re-provision if it goes quiet.
+static const uint8_t MOSAIC_COM_ITFS[] = {0};
 #define MOSAIC_SWEEP_DWELL_MS  6000   // wait this long for bytes before hopping
 #define MOSAIC_OPEN_RETRIES    3      // open retries before hopping off an un-openable itf
 
