@@ -14,6 +14,7 @@
 
 #include "gnss_state.h"
 #include "leveler.h"
+#include "logger.h"
 #include "usb_cdc_source.h"
 #include "nmea_source.h"
 #include "debug_console.h"
@@ -132,6 +133,12 @@ void app_main(void)
     // Read-only NMEA (GGA+GSV) on the Mosaic's second COM (itf2) for the panel's
     // GNSS view — independent of the SBF data path on itf0.
     nmea_source_start();
+
+    // microSD CSV work logger — de-gated: a missing/failed card is logged, never
+    // fatal. Auto-starts logging if a card mounts.
+    if (!logger_init()) {
+        ESP_LOGW(TAG, "SD logger unavailable (no card / mount failed)");
+    }
 
     // Advertise as rtk.local for zero-config field discovery of the status UI.
     // NOTE(hw): needs a netif (WiFi via C6/ESP-Hosted or Ethernet) to be

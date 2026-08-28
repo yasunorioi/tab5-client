@@ -14,6 +14,7 @@
 
 #include "gnss_state.h"
 #include "leveler.h"
+#include "logger.h"
 #include "mosaic_config.h"
 #include "ntrip_client.h"
 #include "status_screen.h"
@@ -191,6 +192,22 @@ static int cmd_cutfill(int argc, char **argv)
     }
     const char *st = s.state > 0 ? "CUT" : s.state < 0 ? "FILL" : "ON GRADE";
     printf("%s  delta=%+.3f m (%+.0f cm)\n", st, s.delta_m, s.delta_m * 100.0);
+    return 0;
+}
+
+static int cmd_log(int argc, char **argv)
+{
+    if (argc >= 2) {
+        if (!strcmp(argv[1], "start"))      { logger_set(true);  printf("logging on\n"); }
+        else if (!strcmp(argv[1], "stop"))  { logger_set(false); printf("logging off\n"); }
+        else printf("usage: log <start|stop>\n");
+        return 0;
+    }
+    logger_status_t s;
+    logger_status_get(&s);
+    printf("sd=%s  logging=%s  rows=%lu  file=%s\n",
+           s.mounted ? "mounted" : "none", s.logging ? "on" : "off",
+           (unsigned long)s.rows, s.path[0] ? s.path : "-");
     return 0;
 }
 
@@ -463,6 +480,7 @@ static void register_cmds(void)
         { .command = "demofield", .help = "load a synthetic field to test the map (bench aid)", .func = cmd_demofield },
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
+        { .command = "log",   .help = "microSD CSV logger: log [start|stop] (no arg = status)", .hint = "[start|stop]", .func = cmd_log },
         { .command = "nmeaout", .help = "show the saved COM1 NMEA output config", .func = cmd_nmeaout },
         { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },
         { .command = "ntripset", .help = "set the base caster: ntripset <host> <port> <mount>", .hint = "<host> <port> <mount>", .func = cmd_ntripset },
