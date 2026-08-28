@@ -6,6 +6,7 @@ idf_component_register(
         "mosaic_config.c"
         "sbf_parser.c"
         "cutfill.c"
+        "fieldmap.c"
         "gnss_state.c"
         "leveler.c"
         "ntrip_client.c"

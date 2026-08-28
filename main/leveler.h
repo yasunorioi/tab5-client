@@ -23,15 +23,31 @@ typedef enum {
     LEVELER_MODE_FLAT,       // flat plane at a captured height
 } leveler_mode_t;
 
+// Continuous-recording mode: while on, leveler_record_tick() auto-samples the fix
+// as the tractor drives (distance-gated) into the survey cloud, and — in PERIMETER
+// mode — also into the boundary polygon traced around the field edge.
+typedef enum {
+    LEVELER_REC_OFF = 0,
+    LEVELER_REC_PERIMETER,   // trace the field boundary + collect cloud
+    LEVELER_REC_SURVEY,      // collect interior cloud only (no boundary)
+} leveler_rec_t;
+
 typedef struct {
     bool           has_origin;
     leveler_mode_t mode;
-    uint32_t       survey_points;
+    leveler_rec_t  rec;
+    uint32_t       survey_points;   // survey cloud size
+    uint32_t       boundary_pts;    // boundary polygon vertices
+    double         area_m2;         // live boundary area (shoelace)
 
     bool   fix_usable;    // current PVT has a valid lat/lon/height
     bool   have_delta;    // delta_m below is valid (fix usable AND a plane is set)
     double delta_m;       // current height − target height; >0 CUT, <0 FILL
     int    state;         // cutfill_classify(delta): -1 FILL, 0 ON GRADE, +1 CUT
+
+    // Earthwork volumes against the active plane (leveler_compute_volumes()).
+    bool   vol_valid;
+    double cut_m3, fill_m3, net_m3;
 } leveler_status_t;
 
 // Dead-band (metres) for the ON-GRADE classification. RTK vertical is ~±2 cm, so
@@ -58,3 +74,17 @@ bool leveler_set_flat_here(void);
 // Snapshot the current leveling state (computes the live delta from the latest
 // PVT against the active plane).
 void leveler_get(leveler_status_t *out);
+
+// Start/stop continuous recording. In PERIMETER mode each auto-sampled fix also
+// extends the boundary polygon; in SURVEY mode only the cloud grows.
+void leveler_record_set(leveler_rec_t mode);
+
+// Distance-gated auto-sampler — call periodically (e.g. from the 4 Hz UI timer).
+// Adds the current fix to the cloud/boundary once the tractor has moved far
+// enough since the last sample. No-op when recording is off or there is no fix.
+void leveler_record_tick(void);
+
+// Compute cut/fill volumes of the survey cloud against the active plane, within
+// the boundary polygon. Returns false without a plane, a ≥3-vertex boundary, and
+// survey points. Result is cached and surfaced via leveler_get().
+bool leveler_compute_volumes(void);

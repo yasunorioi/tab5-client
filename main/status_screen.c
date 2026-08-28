@@ -138,6 +138,8 @@ static void refresh_cb(lv_timer_t *t)
     (void)t;
     char buf[96];
 
+    leveler_record_tick();   // distance-gated auto-sampler (no-op unless recording)
+
     gnss_snapshot_t g;
     gnss_state_snapshot(&g);
     leveler_status_t lv;

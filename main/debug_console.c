@@ -100,8 +100,49 @@ static int cmd_survey(int argc, char **argv)
     leveler_get(&s);
     const char *mode = s.mode == LEVELER_MODE_BALANCE ? "balance"
                      : s.mode == LEVELER_MODE_FLAT    ? "flat" : "none";
-    printf("survey points=%lu  origin=%d  mode=%s\n",
-           (unsigned long)s.survey_points, s.has_origin, mode);
+    const char *rec = s.rec == LEVELER_REC_PERIMETER ? "perimeter"
+                    : s.rec == LEVELER_REC_SURVEY    ? "survey" : "off";
+    printf("survey points=%lu  boundary=%lu  area=%.0f m2  origin=%d  mode=%s  rec=%s\n",
+           (unsigned long)s.survey_points, (unsigned long)s.boundary_pts,
+           s.area_m2, s.has_origin, mode, rec);
+    return 0;
+}
+
+static int cmd_record(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: record <perim|field|stop>\n");
+        printf("  drive the field edge with 'perim' (traces boundary + cloud),\n");
+        printf("  drive interior passes with 'field' (cloud only), then 'stop'.\n");
+        return 0;
+    }
+    if (!strcmp(argv[1], "perim")) {
+        leveler_record_set(LEVELER_REC_PERIMETER);
+        printf("recording PERIMETER — drive the field edge, then 'record stop'\n");
+    } else if (!strcmp(argv[1], "field")) {
+        leveler_record_set(LEVELER_REC_SURVEY);
+        printf("recording SURVEY — drive interior passes, then 'record stop'\n");
+    } else if (!strcmp(argv[1], "stop")) {
+        leveler_record_set(LEVELER_REC_OFF);
+        printf("recording stopped\n");
+    } else {
+        printf("usage: record <perim|field|stop>\n");
+    }
+    return 0;
+}
+
+static int cmd_vol(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (!leveler_compute_volumes()) {
+        printf("cannot compute — need a plane (survey fit / flat), a boundary "
+               "(record perim), and survey points\n");
+        return 0;
+    }
+    leveler_status_t s;
+    leveler_get(&s);
+    printf("volumes vs plane: cut=%.1f  fill=%.1f  net=%.1f m3   area=%.0f m2\n",
+           s.cut_m3, s.fill_m3, s.net_m3, s.area_m2);
     return 0;
 }
 
@@ -374,6 +415,8 @@ static void register_cmds(void)
         { .command = "stats", .help = "SBF block/CRC counters + fix + staleness", .func = cmd_stats },
         { .command = "sbf",   .help = "decoded SBF: PVT/Att/DOP/RxStatus latest values", .func = cmd_sbf },
         { .command = "survey", .help = "cut/fill survey: survey [add|clear|fit] (no arg = status)", .hint = "[add|clear|fit]", .func = cmd_survey },
+        { .command = "record", .help = "continuous survey recording: record <perim|field|stop>", .hint = "<perim|field|stop>", .func = cmd_record },
+        { .command = "vol",   .help = "compute cut/fill VOLUMES (m3) vs the active plane within the boundary", .func = cmd_vol },
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
         { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },
