@@ -58,17 +58,22 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
-// ── survey/plane button handlers (run in the LVGL task) ──────────────────────
+// ── button handlers (run in the LVGL task) ───────────────────────────────────
 static void on_flat(lv_event_t *e)  { (void)e; leveler_set_flat_here(); }
-static void on_add(lv_event_t *e)   { (void)e; leveler_survey_add_current(); }
 static void on_fit(lv_event_t *e)   { (void)e; leveler_fit_balance(); }
 static void on_clear(lv_event_t *e) { (void)e; leveler_survey_clear(); }
+static void on_perim(lv_event_t *e) { (void)e; leveler_record_set(LEVELER_REC_PERIMETER); }
+static void on_field(lv_event_t *e) { (void)e; leveler_record_set(LEVELER_REC_SURVEY); }
+static void on_stop(lv_event_t *e)  { (void)e; leveler_record_set(LEVELER_REC_OFF); }
+static void on_map(lv_event_t *e)   { (void)e; status_screen_show_map(true); }
 
-static void add_button(lv_obj_t *row, const char *text, lv_event_cb_t cb)
+static lv_obj_t *s_btn_perim, *s_btn_field;
+
+static lv_obj_t *add_button(lv_obj_t *row, const char *text, lv_event_cb_t cb)
 {
     lv_obj_t *btn = lv_button_create(row);
     lv_obj_set_flex_grow(btn, 1);
-    lv_obj_set_height(btn, 110);
+    lv_obj_set_height(btn, 96);
     lv_obj_set_style_bg_color(btn, lv_color_hex(0x18406A), 0);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
@@ -76,6 +81,21 @@ static void add_button(lv_obj_t *row, const char *text, lv_event_cb_t cb)
     lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
     lv_label_set_text(l, text);
     lv_obj_center(l);
+    return btn;
+}
+
+static lv_obj_t *make_row(lv_obj_t *scr)
+{
+    lv_obj_t *row = lv_obj_create(scr);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_set_style_pad_bottom(row, 12, 0);
+    return row;
 }
 
 static void build_ui(void)
@@ -103,7 +123,7 @@ static void build_ui(void)
 
     // Vertical light-bar: deviation from grade, symmetrical about centre.
     s_bar = lv_bar_create(scr);
-    lv_obj_set_size(s_bar, 150, 560);
+    lv_obj_set_size(s_bar, 150, 440);
     lv_bar_set_range(s_bar, -BAR_CM_FS, BAR_CM_FS);
     lv_bar_set_mode(s_bar, LV_BAR_MODE_SYMMETRICAL);
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
@@ -120,19 +140,18 @@ static void build_ui(void)
     lv_obj_set_style_pad_bottom(s_mode, 16, 0);
     lv_label_set_text(s_mode, "survey 0 pts");
 
-    // Button row: Flat / Survey+ / Fit / Clear.
-    lv_obj_t *row = lv_obj_create(scr);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, 12, 0);
-    add_button(row, "Flat",    on_flat);
-    add_button(row, "Survey+", on_add);
-    add_button(row, "Fit",     on_fit);
-    add_button(row, "Clear",   on_clear);
+    // Row 1 — recording controls (drive the field to build the survey/boundary).
+    lv_obj_t *row1 = make_row(scr);
+    s_btn_perim = add_button(row1, "Perim", on_perim);
+    s_btn_field = add_button(row1, "Field", on_field);
+    add_button(row1, "Stop", on_stop);
+
+    // Row 2 — target plane + navigation to the field map.
+    lv_obj_t *row2 = make_row(scr);
+    add_button(row2, "Flat",  on_flat);
+    add_button(row2, "Fit",   on_fit);
+    add_button(row2, "Clear", on_clear);
+    add_button(row2, "Map >", on_map);
 }
 
 static void refresh_cb(lv_timer_t *t)
@@ -212,6 +231,12 @@ static void refresh_cb(lv_timer_t *t)
         snprintf(buf, sizeof(buf), "%s  %lu pts", mode,
                  (unsigned long)lv.survey_points);
     lv_label_set_text(s_mode, buf);
+
+    // Highlight whichever recording mode is active (green = recording).
+    uint32_t cp = (lv.rec == LEVELER_REC_PERIMETER) ? C_OK : 0x18406A;
+    uint32_t cf = (lv.rec == LEVELER_REC_SURVEY)    ? C_OK : 0x18406A;
+    if (s_btn_perim) lv_obj_set_style_bg_color(s_btn_perim, lv_color_hex(cp), 0);
+    if (s_btn_field) lv_obj_set_style_bg_color(s_btn_field, lv_color_hex(cf), 0);
 }
 
 esp_err_t status_screen_start(void)

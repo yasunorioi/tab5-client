@@ -4,6 +4,7 @@
 #include "display.h"
 #include "leveler.h"
 #include "fieldmap.h"
+#include "status_screen.h"   // status_screen_show_map (Work button)
 
 #include <math.h>
 #include <string.h>
@@ -15,9 +16,9 @@
 static const char *TAG = "map";
 
 // Off-screen canvas geometry (fits the 720-wide panel with margins; the volume
-// readout sits above it).
+// readout sits above it and the Work/Vol buttons below).
 #define MAP_W   680
-#define MAP_H   1000
+#define MAP_H   900
 #define MARGIN  16
 #define DEADBAND_M 0.03   // matches LEVELER_DEADBAND_M (ON GRADE band)
 
@@ -83,6 +84,29 @@ static uint16_t heat(double dev)
     return rgb565(0x2E9E4A);         // ON GRADE (green)
 }
 
+// Bottom nav/action buttons.
+static void on_work(lv_event_t *e) { (void)e; status_screen_show_map(false); }
+static void on_vol(lv_event_t *e)
+{
+    (void)e;
+    leveler_compute_volumes();   // recompute (float MLS — quick)
+    map_view_update();
+}
+
+static void map_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_height(btn, 96);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x18406A), 0);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *l = lv_label_create(btn);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_label_set_text(l, text);
+    lv_obj_center(l);
+}
+
 lv_obj_t *map_view_build(void)
 {
     s_screen = lv_obj_create(NULL);
@@ -104,6 +128,19 @@ lv_obj_t *map_view_build(void)
     s_canvas = lv_canvas_create(s_screen);
     lv_canvas_set_buffer(s_canvas, s_buf, MAP_W, MAP_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_canvas, LV_ALIGN_TOP_MID, 0, 64);
+
+    // Bottom button row: back to the work screen + recompute volumes.
+    lv_obj_t *row = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(94));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 16, 0);
+    map_button(row, "< Work", on_work);
+    map_button(row, "Vol",    on_vol);
 
     uint16_t bg = rgb565(0x0A1A2A);
     for (int i = 0; i < MAP_W * MAP_H; i++) s_buf[i] = bg;
