@@ -88,3 +88,13 @@ void leveler_record_tick(void);
 // the boundary polygon. Returns false without a plane, a ≥3-vertex boundary, and
 // survey points. Result is cached and surfaced via leveler_get().
 bool leveler_compute_volumes(void);
+
+// ── plan-view map support (map_view.c) ───────────────────────────────────────
+// Active plane z = a·E + b·N + c (c relative to the datum). False if none set.
+bool leveler_get_plane(double *a, double *b, double *c);
+// Current fix projected into the local E/N frame (for the position marker).
+// False if there is no fix or no origin yet.
+bool leveler_current_en(double *east_m, double *north_m);
+// Load a synthetic tilted+undulating field (boundary + cloud + balance plane) so
+// the map can be checked on the bench without driving. TEST AID.
+void leveler_demo_field(void);

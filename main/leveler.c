@@ -188,6 +188,56 @@ bool leveler_compute_volumes(void)
     return ok;
 }
 
+bool leveler_get_plane(double *a, double *b, double *c)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ok = s_plane.valid;
+    if (ok) { if (a) *a = s_plane.a; if (b) *b = s_plane.b; if (c) *c = s_plane.c; }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
+bool leveler_current_en(double *east_m, double *north_m)
+{
+    double lat, lon, h;
+    if (!current_fix(&lat, &lon, &h)) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ok = s_geo.set;
+    if (ok) cutfill_project(&s_geo, lat, lon, east_m, north_m);
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
+void leveler_demo_field(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    // Dummy origin so plane/height math has a datum; E/N are relative anyway.
+    if (!s_geo.set) cutfill_geo_init(&s_geo, 0.0, 0.0, 0.0);
+    cutfill_survey_reset(&s_survey);
+    fieldmap_reset();
+    s_points = 0;
+    s_boundary = 0;
+
+    const double W = 60.0, H = 40.0;   // 60 x 40 m rectangular field
+    fieldmap_boundary_add(0, 0); fieldmap_boundary_add(W, 0);
+    fieldmap_boundary_add(W, H); fieldmap_boundary_add(0, H);
+    s_boundary = 4;
+
+    // Tilted + undulating surface (h0 = 0 so z passed as height directly).
+    for (double e = 0; e <= W; e += 2.0) {
+        for (double n = 0; n <= H; n += 2.0) {
+            double z = 0.02 * e - 0.01 * n + 0.06 * sin(e * 0.2) * cos(n * 0.25);
+            fieldmap_point_add(e, n, z);
+            cutfill_survey_add_en(&s_survey, &s_geo, e, n, z);
+            s_points++;
+        }
+    }
+    cutfill_fit_balance(&s_survey, &s_plane);
+    s_mode = LEVELER_MODE_BALANCE;
+    s_vol_valid = false;
+    xSemaphoreGive(s_lock);
+}
+
 void leveler_get(leveler_status_t *out)
 {
     if (out == NULL) return;

@@ -48,6 +48,16 @@ uint32_t fieldmap_point_count(void);
 // Boundary polygon area in m² (shoelace, absolute). 0 with fewer than 3 vertices.
 double fieldmap_area(void);
 
+// ── geometry queries for the plan-view map (map_view.c) ──────────────────────
+// Bounding box of the boundary. Returns false with fewer than 1 vertex.
+bool fieldmap_bbox(double *emin, double *emax, double *nmin, double *nmax);
+// i-th boundary vertex (ordered). False if i is out of range.
+bool fieldmap_boundary_get(uint32_t i, double *east_m, double *north_m);
+// Ray-cast point-in-boundary test.
+bool fieldmap_inside(double east_m, double north_m);
+// MLS-interpolated surface height at (E,N) from the cloud (0 if no points).
+double fieldmap_surface_at(double east_m, double north_m);
+
 // Compute cut/fill volumes against the target plane z = a·E + b·N + c (c relative
 // to the same datum as the points' z). cell_m is the grid resolution in metres
 // (e.g. 1.0). Returns false (out->valid=false) if there is no usable boundary

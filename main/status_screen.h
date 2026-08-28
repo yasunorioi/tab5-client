@@ -8,7 +8,12 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
 
 // Init LVGL, attach the DSI panel, build + start the status page. Returns an
 // error (does not abort) if LVGL or the display binding fails.
 esp_err_t status_screen_start(void);
+
+// Switch between the leveler work screen (false) and the plan-view field map
+// screen (true). Safe to call from any task (takes the LVGL lock).
+void status_screen_show_map(bool show);

@@ -21,6 +21,7 @@ idf_component_register(
         "esp_lcd_st7123.c"
         "tab5_st7123_init.c"
         "status_screen.c"
+        "map_view.c"
         "gnss_view.c"
         "web_server.c"
     INCLUDE_DIRS "."

@@ -15,6 +15,7 @@
 #include "gnss_state.h"
 #include "leveler.h"
 #include "ntrip_client.h"
+#include "status_screen.h"
 #include "usb_cdc_source.h"
 #include "wifi_sta.h"
 #include "display.h"
@@ -143,6 +144,29 @@ static int cmd_vol(int argc, char **argv)
     leveler_get(&s);
     printf("volumes vs plane: cut=%.1f  fill=%.1f  net=%.1f m3   area=%.0f m2\n",
            s.cut_m3, s.fill_m3, s.net_m3, s.area_m2);
+    return 0;
+}
+
+static int cmd_screen(int argc, char **argv)
+{
+    if (argc >= 2 && !strcmp(argv[1], "map")) {
+        status_screen_show_map(true);
+        printf("showing field map\n");
+    } else if (argc >= 2 && !strcmp(argv[1], "work")) {
+        status_screen_show_map(false);
+        printf("showing leveler work screen\n");
+    } else {
+        printf("usage: screen <work|map>\n");
+    }
+    return 0;
+}
+
+static int cmd_demofield(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    leveler_demo_field();
+    printf("synthetic 60x40 m field loaded (boundary + cloud + balance plane).\n");
+    printf("run 'screen map' to view it.\n");
     return 0;
 }
 
@@ -417,6 +441,8 @@ static void register_cmds(void)
         { .command = "survey", .help = "cut/fill survey: survey [add|clear|fit] (no arg = status)", .hint = "[add|clear|fit]", .func = cmd_survey },
         { .command = "record", .help = "continuous survey recording: record <perim|field|stop>", .hint = "<perim|field|stop>", .func = cmd_record },
         { .command = "vol",   .help = "compute cut/fill VOLUMES (m3) vs the active plane within the boundary", .func = cmd_vol },
+        { .command = "screen", .help = "switch panel screen: screen <work|map>", .hint = "<work|map>", .func = cmd_screen },
+        { .command = "demofield", .help = "load a synthetic field to test the map (bench aid)", .func = cmd_demofield },
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
         { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },

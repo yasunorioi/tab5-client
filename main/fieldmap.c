@@ -66,8 +66,33 @@ double fieldmap_area(void)
     return fabs(a2) * 0.5;
 }
 
+bool fieldmap_bbox(double *emin, double *emax, double *nmin, double *nmax)
+{
+    if (s_nbound < 1) return false;
+    double e0 = s_bound[0].e, e1 = e0, n0 = s_bound[0].n, n1 = n0;
+    for (uint32_t i = 1; i < s_nbound; i++) {
+        if (s_bound[i].e < e0) e0 = s_bound[i].e;
+        if (s_bound[i].e > e1) e1 = s_bound[i].e;
+        if (s_bound[i].n < n0) n0 = s_bound[i].n;
+        if (s_bound[i].n > n1) n1 = s_bound[i].n;
+    }
+    if (emin) *emin = e0;
+    if (emax) *emax = e1;
+    if (nmin) *nmin = n0;
+    if (nmax) *nmax = n1;
+    return true;
+}
+
+bool fieldmap_boundary_get(uint32_t i, double *e, double *n)
+{
+    if (i >= s_nbound) return false;
+    if (e) *e = s_bound[i].e;
+    if (n) *n = s_bound[i].n;
+    return true;
+}
+
 // Ray-casting point-in-polygon test on the boundary.
-static bool inside(double e, double n)
+bool fieldmap_inside(double e, double n)
 {
     bool in = false;
     for (uint32_t i = 0, j = s_nbound - 1; i < s_nbound; j = i++) {
@@ -115,20 +140,31 @@ static bool solve3(double a11, double a12, double a13,
 // Weighted LS of a plane's samples returns that plane EXACTLY, so a planar field
 // interpolates with zero error (unlike IDW, which smooths). Far points carry tiny
 // weight, so for a curved surface the fit is effectively local.
+//
+// The per-point accumulation is FLOAT: the esp32p4 has a single-precision FPU but
+// software double, so float here is ~10× faster — the difference between a snappy
+// map repaint and tripping the task watchdog. Δe/Δn/z are metre-scale so float's
+// ~7 digits is sub-millimetre. The tiny 3×3 solve stays double.
 static double mls_height(double e0, double n0)
 {
-    double sEE = 0, sEN = 0, sE = 0, sNN = 0, sN = 0, sW = 0, sEZ = 0, sNZ = 0, sZ = 0;
+    float sEE = 0, sEN = 0, sE = 0, sNN = 0, sN = 0, sW = 0, sEZ = 0, sNZ = 0, sZ = 0;
     for (uint32_t k = 0; k < s_npts; k++) {
-        double de = s_pts[k].e - e0, dn = s_pts[k].n - n0;
-        double w = 1.0 / (de * de + dn * dn + 1e-6);   // IDW^2 weights
+        float de = (float)(s_pts[k].e - e0), dn = (float)(s_pts[k].n - n0);
+        float z  = (float)s_pts[k].z;
+        float w  = 1.0f / (de * de + dn * dn + 1e-6f);   // IDW^2 weights
         sEE += w * de * de; sEN += w * de * dn; sE += w * de;
         sNN += w * dn * dn; sN += w * dn;       sW += w;
-        sEZ += w * de * s_pts[k].z; sNZ += w * dn * s_pts[k].z; sZ += w * s_pts[k].z;
+        sEZ += w * de * z;  sNZ += w * dn * z;  sZ += w * z;
     }
     double A, B, C;
     // Normal equations for [A,B,C] with the constant column = the Σw row/col.
     if (solve3(sEE, sEN, sE, sNN, sN, sW, sEZ, sNZ, sZ, &A, &B, &C)) return C;
-    return sW > 0 ? sZ / sW : 0.0;   // degenerate → weighted mean
+    return sW > 0 ? (double)(sZ / sW) : 0.0;   // degenerate → weighted mean
+}
+
+double fieldmap_surface_at(double e, double n)
+{
+    return s_npts ? mls_height(e, n) : 0.0;
 }
 
 bool fieldmap_compute(double a, double b, double c, double cell_m,
@@ -161,7 +197,7 @@ bool fieldmap_compute(double a, double b, double c, double cell_m,
     // Sample cell CENTRES; a centre inside the polygon contributes one cell.
     for (double n = nmin + cell_m * 0.5; n < nmax; n += cell_m) {
         for (double e = emin + cell_m * 0.5; e < emax; e += cell_m) {
-            if (!inside(e, n)) continue;
+            if (!fieldmap_inside(e, n)) continue;
             double surface = mls_height(e, n);
             double target  = a * e + b * n + c;
             double dev = surface - target;   // >0 ground high (cut), <0 low (fill)
