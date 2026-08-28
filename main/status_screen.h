@@ -17,3 +17,6 @@ esp_err_t status_screen_start(void);
 // Switch between the leveler work screen (false) and the plan-view field map
 // screen (true). Safe to call from any task (takes the LVGL lock).
 void status_screen_show_map(bool show);
+
+// Show the NMEA-output settings screen. Safe to call from any task.
+void status_screen_show_settings(void);

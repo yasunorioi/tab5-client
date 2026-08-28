@@ -14,6 +14,7 @@
 
 #include "gnss_state.h"
 #include "leveler.h"
+#include "mosaic_config.h"
 #include "ntrip_client.h"
 #include "status_screen.h"
 #include "usb_cdc_source.h"
@@ -190,6 +191,23 @@ static int cmd_cutfill(int argc, char **argv)
     }
     const char *st = s.state > 0 ? "CUT" : s.state < 0 ? "FILL" : "ON GRADE";
     printf("%s  delta=%+.3f m (%+.0f cm)\n", st, s.delta_m, s.delta_m * 100.0);
+    return 0;
+}
+
+static int cmd_nmeaout(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    uint16_t msgs; uint8_t rate;
+    mosaic_nmea_cfg_get(&msgs, &rate);
+    static const struct { uint16_t b; const char *n; } T[] = {
+        {NMEA_MSG_GGA,"GGA"},{NMEA_MSG_RMC,"RMC"},{NMEA_MSG_VTG,"VTG"},
+        {NMEA_MSG_GSA,"GSA"},{NMEA_MSG_ZDA,"ZDA"},{NMEA_MSG_GSV,"GSV"},
+    };
+    printf("COM1 NMEA (saved): rate=%s  msgs=", mosaic_nmea_rate_str(rate));
+    bool any = false;
+    for (int i = 0; i < 6; i++)
+        if (msgs & T[i].b) { printf("%s%s", any ? "+" : "", T[i].n); any = true; }
+    printf("%s\n", any ? "" : "(none)");
     return 0;
 }
 
@@ -445,6 +463,7 @@ static void register_cmds(void)
         { .command = "demofield", .help = "load a synthetic field to test the map (bench aid)", .func = cmd_demofield },
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
+        { .command = "nmeaout", .help = "show the saved COM1 NMEA output config", .func = cmd_nmeaout },
         { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },
         { .command = "ntripset", .help = "set the base caster: ntripset <host> <port> <mount>", .hint = "<host> <port> <mount>", .func = cmd_ntripset },
         { .command = "ntripreset", .help = "erase caster creds (NTRIP client idles)", .func = cmd_ntripreset },

@@ -86,6 +86,7 @@ static uint16_t heat(double dev)
 
 // Bottom nav/action buttons.
 static void on_work(lv_event_t *e) { (void)e; status_screen_show_map(false); }
+static void on_cfg(lv_event_t *e)  { (void)e; status_screen_show_settings(); }
 static void on_vol(lv_event_t *e)
 {
     (void)e;
@@ -141,6 +142,7 @@ lv_obj_t *map_view_build(void)
     lv_obj_set_style_pad_column(row, 16, 0);
     map_button(row, "< Work", on_work);
     map_button(row, "Vol",    on_vol);
+    map_button(row, "Cfg >",  on_cfg);
 
     uint16_t bg = rgb565(0x0A1A2A);
     for (int i = 0; i < MAP_W * MAP_H; i++) s_buf[i] = bg;

@@ -18,6 +18,7 @@
 #include "gnss_state.h"
 #include "leveler.h"
 #include "map_view.h"
+#include "settings_view.h"
 #include "usb_cdc_source.h"
 #include "touch.h"
 
@@ -38,7 +39,7 @@ static const char *TAG = "status_ui";
 
 static lv_obj_t *s_status, *s_cutfill, *s_bar, *s_mode;
 static lv_indev_t *s_indev;
-static lv_obj_t *s_work_screen, *s_map_screen;
+static lv_obj_t *s_work_screen, *s_map_screen, *s_settings_screen;
 
 // ── LVGL touch input device ──────────────────────────────────────────────────
 // Reads touch.c's debounced cache (no I2C in the LVGL task). Raw coords map 1:1
@@ -168,6 +169,8 @@ static void refresh_cb(lv_timer_t *t)
         if (++mtick >= 4) { mtick = 0; map_view_update(); }   // ~1 Hz at a 250 ms timer
         return;
     }
+    // The settings screen is static (no live widgets); recording continues.
+    if (s_settings_screen && lv_screen_active() == s_settings_screen) return;
 
     gnss_snapshot_t g;
     gnss_state_snapshot(&g);
@@ -272,8 +275,9 @@ esp_err_t status_screen_start(void)
     }
 
     build_ui();
-    s_work_screen = lv_screen_active();     // build_ui() painted onto the default screen
-    s_map_screen  = map_view_build();       // second screen (plan-view field map)
+    s_work_screen     = lv_screen_active(); // build_ui() painted onto the default screen
+    s_map_screen      = map_view_build();   // second screen (plan-view field map)
+    s_settings_screen = settings_view_build(); // third screen (NMEA output config)
     refresh_cb(NULL);                       // paint once immediately
     lv_timer_create(refresh_cb, 250, NULL); // 4 Hz — responsive cut/fill
     lvgl_port_unlock();
@@ -289,5 +293,14 @@ void status_screen_show_map(bool show)
     if (!lvgl_port_lock(500)) return;
     lv_screen_load(show ? s_map_screen : s_work_screen);
     if (show) map_view_update();            // paint immediately on switch
+    lvgl_port_unlock();
+}
+
+void status_screen_show_settings(void)
+{
+    if (!s_settings_screen) return;
+    if (!lvgl_port_lock(500)) return;
+    settings_view_refresh();                // reload the working copy from NVS
+    lv_screen_load(s_settings_screen);
     lvgl_port_unlock();
 }
