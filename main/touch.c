@@ -23,11 +23,16 @@ static const char *TAG = "touch";
 #define TOUCH_STRIDE         7        // bytes per point
 #define TOUCH_VALID          0x80     // point[0] bit7
 #define COORD_HIGH_MASK      0x3F
-// Read the header (0x10..0x13) + one point (7 B). Point 0 lands at offset 4.
-#define READ_LEN             ((REG_TOUCH_DATA - REG_ADV_TOUCH_INFO) + TOUCH_STRIDE)
+#define ST7123_MAX_TOUCHES   10       // controller's report-table depth
+// The ST7123 latches its report table and only refreshes it (and clears INT)
+// once the table is read THROUGH THE LAST touch point. Reading just point 0
+// (the old 11-byte read) left INT asserted, so every subsequent read returned
+// the STALE first-ever coordinate — coordinates looked frozen. Read the whole
+// table so each poll gets fresh data. Point 0 still lands at offset 4.
+#define READ_LEN             ((REG_TOUCH_DATA - REG_ADV_TOUCH_INFO) + ST7123_MAX_TOUCHES * TOUCH_STRIDE)
 #define POINT0_OFF           (REG_TOUCH_DATA - REG_ADV_TOUCH_INFO)
 
-#define POLL_MS              100      // 10 Hz — catches taps, cheap (11 B read)
+#define POLL_MS              30       // ~33 Hz — responsive enough for the touch UI
 #define I2C_TIMEOUT_MS       50
 // Phantom rejection without hurting wake latency: count valid samples in a
 // short sliding window rather than requiring N in a row. The ST7123's phantom
@@ -40,6 +45,11 @@ static const char *TAG = "touch";
 static i2c_master_dev_handle_t s_dev;
 static volatile int64_t        s_last_us;
 static volatile bool           s_present;
+// Latest decoded point + debounced pressed state, published by poll_task for the
+// LVGL input device (touch_get_point). Single writer (poll_task); readers tolerate
+// a torn coordinate (worst case: one frame at a stale-but-valid position).
+static volatile int            s_x, s_y;
+static volatile bool           s_pressed;
 
 // Read READ_LEN bytes starting at REG_ADV_TOUCH_INFO. Returns ESP_OK on a good
 // I2C transaction (whether or not a finger is down).
@@ -64,6 +74,13 @@ esp_err_t touch_read_point(bool *valid, int *x, int *y)
     return ESP_OK;
 }
 
+esp_err_t touch_read_raw(uint16_t reg, uint8_t *buf, size_t len)
+{
+    if (!s_dev) return ESP_ERR_INVALID_STATE;
+    uint8_t r[2] = { (uint8_t)((reg >> 8) & 0xFF), (uint8_t)(reg & 0xFF) };
+    return i2c_master_transmit_receive(s_dev, r, sizeof(r), buf, len, I2C_TIMEOUT_MS);
+}
+
 static void poll_task(void *arg)
 {
     (void)arg;
@@ -71,19 +88,34 @@ static void poll_task(void *arg)
     uint8_t hist = 0;   // bit i = validity of the poll i cycles ago (bit0 = now)
     while (1) {
         int valid = 0;
-        if (read_block(b) == ESP_OK)
-            valid = (b[POINT0_OFF] & TOUCH_VALID) ? 1 : 0;
+        if (read_block(b) == ESP_OK) {
+            const uint8_t *p = b + POINT0_OFF;
+            valid = (p[0] & TOUCH_VALID) ? 1 : 0;
+            if (valid) {   // raw coords map 1:1 to the 720x1280 panel (calibrated)
+                s_x = ((p[0] & COORD_HIGH_MASK) << 8) | p[1];
+                s_y = ((p[2] & COORD_HIGH_MASK) << 8) | p[3];
+            }
+        }
         hist = (uint8_t)((hist << 1) | valid);
-        // Real touch only if >= TOUCH_MIN valid in the last TOUCH_WIN polls; a
-        // lone phantom sample can never reach it, so it won't reset the timer.
-        if (__builtin_popcount(hist & ((1u << TOUCH_WIN) - 1)) >= TOUCH_MIN)
-            s_last_us = esp_timer_get_time();
+        // Debounced "pressed": >= TOUCH_MIN valid in the last TOUCH_WIN polls. A
+        // lone phantom sample can never reach it, so it won't reset the idle timer
+        // or fire a spurious tap on the LVGL input device.
+        bool pressed = __builtin_popcount(hist & ((1u << TOUCH_WIN) - 1)) >= TOUCH_MIN;
+        s_pressed = pressed;
+        if (pressed) s_last_us = esp_timer_get_time();
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
 }
 
 bool    touch_present(void)          { return s_present; }
 int64_t touch_last_activity_us(void) { return s_last_us; }
+
+bool touch_get_point(int *x, int *y)
+{
+    if (x) *x = s_x;
+    if (y) *y = s_y;
+    return s_pressed;
+}
 
 esp_err_t touch_init(void)
 {

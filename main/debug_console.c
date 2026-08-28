@@ -266,6 +266,21 @@ static int cmd_touch(int argc, char **argv)
     return 0;
 }
 
+static int cmd_touchraw(int argc, char **argv)
+{
+    uint16_t reg = 0x0010;
+    int len = 16;
+    if (argc >= 2) reg = (uint16_t)strtol(argv[1], NULL, 16);
+    if (argc >= 3) { len = atoi(argv[2]); if (len < 1 || len > 64) len = 16; }
+    uint8_t buf[64];
+    esp_err_t e = touch_read_raw(reg, buf, len);
+    if (e != ESP_OK) { printf("touchraw read err: %s\n", esp_err_to_name(e)); return 0; }
+    printf("reg 0x%04X:", reg);
+    for (int i = 0; i < len; i++) printf(" %02X", buf[i]);
+    printf("\n");
+    return 0;
+}
+
 static int cmd_nmea(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -368,6 +383,7 @@ static void register_cmds(void)
         { .command = "mosaic", .help = "send a raw Septentrio command to the Mosaic + print reply", .hint = "<command>", .func = cmd_mosaic },
         { .command = "disp", .help = "fill the panel with a color (light-up test): disp <red|green|blue|white|black|hex> [bl%]", .hint = "[color] [bl%]", .func = cmd_disp },
         { .command = "touch", .help = "read the touch point + idle time (idle-off test)", .func = cmd_touch },
+        { .command = "touchraw", .help = "hexdump ST7123 touch registers: touchraw [reg_hex] [len]", .hint = "[reg] [len]", .func = cmd_touchraw },
         { .command = "nmea", .help = "itf2 NMEA state: GGA/GSV counts + per-sat el/az/cn0", .func = cmd_nmea },
         { .command = "i2cscan", .help = "probe the Tab5 system I2C bus (identify touch IC -> panel rev)", .func = cmd_i2cscan },
         { .command = "wifiset", .help = "set WiFi creds + reboot to join: wifiset <ssid> [pass]", .hint = "<ssid> [pass]", .func = cmd_wifiset },

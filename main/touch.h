@@ -28,3 +28,12 @@ int64_t touch_last_activity_us(void);
 
 // One-shot read for the `touch` console command: fills *valid/*x/*y from point 0.
 esp_err_t touch_read_point(bool *valid, int *x, int *y);
+
+// Raw register read for touch bring-up/diagnosis (`touchraw` console command):
+// read `len` bytes starting at 16-bit register `reg` from the ST7123.
+esp_err_t touch_read_raw(uint16_t reg, uint8_t *buf, size_t len);
+
+// Latest debounced touch point for the LVGL input device. Returns true if a
+// finger is currently down (debounced); *x/*y are the last valid coordinates in
+// panel pixels (0..719 x, 0..1279 y). Non-blocking (reads poll_task's cache).
+bool touch_get_point(int *x, int *y);
