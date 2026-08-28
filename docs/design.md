@@ -19,51 +19,63 @@
 | 圃場での通信 | **スマホのテザリング**（Tab5 を STA で接続） | 圃場に WiFi は無い。3.3 kbps しか使わないので十分。LTE モジュール内蔵は USB-A が受信機で埋まるためハブが必要になり割に合わない |
 | リポジトリ | tab5-caster の clone を **private** で運用 | GitHub の fork ボタンは public repo の fork を private にできない。clone を新 private repo に push する形にして `upstream` 追跡を残す |
 
-## アーキテクチャ（tab5-caster からの組み替え）
+## アーキテクチャ（実装済み）
 
 ```
- NTRIP caster ──(WiFi/テザリング)── C6 ─ SDIO ─┐
-                                                ▼
-                                    ntrip_client (de-chunk 必須)
-                                                │ RTCM3
-                                                ▼
- mosaic-G5 P3H ◄── USB-A (P4 = HS-OTG Host, CDC-ACM, USB1 へ write)
+ NTRIP caster ──(WiFi/テザリング)── C6 ─ SDIO ─ ntrip_client.c (de-chunk)
+                                                     │ RTCM3
+                                                     ▼
+ mosaic-G5 P3H ◄── USB-A (P4 HS-OTG Host, CDC-ACM) ── usb_cdc_write() [itf0]
         │
-        │ SBF (PVTGeodetic + AttEuler + DOP + ReceiverStatus)
+        │ SBF (PVTGeodetic + AttEuler + DOP + ReceiverStatus) [itf0]
         ▼
-   sbf_source ──► 測位・姿勢
-                     │
-                     ├─► survey  : 点群収集 → 土量バランス平面の算出
-                     ├─► guidance: 設計高 - 実測高 = cut/fill
-                     ├─► LVGL 画面（大きい数値 + 色 + 平面図 + RTK ステータス）
-                     └─► microSD ロガー
+ usb_cdc_source.c ──► gnss_state.c (SBF パーサ状態) ──┐
+                                                       ├─► leveler.c ─┬─ cutfill.c  (バランス平面/delta)
+   (COM1 → RS232 外部機器へ GGA/NMEA)                  │              └─ fieldmap.c (外周/点群/土量 m³)
+                                                       └─► 画面 (下記)
 ```
 
-### 流用する（ほぼそのまま）
+### モジュール地図
 
-- `board_power.c` — **USB-A VBUS ゲート（PI4IOE5V6408 #2, I2C 0x44, P3）。必須**。
-  これを叩かないと受信機が enumerate しない
-- `display.c` / `esp_lcd_st7123.c` / `tab5_*_init.c` / LVGL / `touch.c`
-- `wifi_sta.c` + C6 ESP-Hosted（接続先が変わるだけ）
-- `backlight.c` — ブラウンアウト対策。トラクター電源なら余裕はあるが残す価値あり
-- `web_server.c` — 圃場設定・設計面パラメータの UI に転用
+**データ経路**
+- `usb_cdc_source.c` — USB Host CDC。**SBF は itf0 のみ**読む（sweep に itf2 を入れない）。
+  `usb_cdc_write()` で NTRIP の RTCM3 を受信機へ流す
+- `gnss_state.c` — SBF パーサ状態の thread-safe ホルダ（sbf_parser.c を内包）
+- `sbf_parser.c` — ESP-IDF 非依存の SBF ストリーミングパーサ（ホスト検証可）
+- `cutfill.c` — ローカル ENU 投影 + 最小二乗バランス平面 + delta（純ロジック）
+- `fieldmap.c` — 境界ポリゴン + 点群 + **MLS 補間で切土/盛土 m³**（MLS は float）
+- `leveler.c` — 上記を実 PVT から駆動（survey/record/plane/delta/volume の統合）
+- `ntrip_client.c` — 基準局から RTCM3 を de-chunk して受信機へ
+- `mosaic_config.c` / `mosaic_usb.h` — 毎起動プロビジョニング（SBF/NMEA/COM1）と VID/PID
+- `logger.c` — microSD CSV ロガー（⚠SD マウント未解決）
 
-### 書き換える
+**UI（LVGL, 3画面）**
+- `status_screen.c` — 作業画面 + タッチ indev登録 + 画面遷移の親
+- `map_view.c` — 平面図 MAP（キャンバス直描画）
+- `settings_view.c` — NMEA 出力設定（NVS）
+- `touch.c` — ST7123 タッチ（**報告テーブル全点読み**）+ LVGL 用キャッシュ
+- 流用: `display.c`/`esp_lcd_st7123.c`/`tab5_*_init.c`/`backlight.c`/`gnss_view.c`
 
-- `usb_cdc_source.c` — PID `0x8231`、itf `{0, 2}`、**双方向化**（RTCM3 write / SBF read）
-- `nmea_source.c` — **SBF パーサに置換**
-- `upstream.c` — NTRIP **server/push** → NTRIP **client**（GET）。骨格は流用可
+**ネット/その他（caster から流用）**
+- `wifi_sta.c`（C6 ESP-Hosted, GOT_IP で ntrip/web 起動）/ `net_mdns.c` / `web_server.c`（status UI）
+- `board_power.c`（USB-A VBUS ゲート・必須）/ `debug_console.c`
 
-### 落とす
+**削除済み**: `rtcm_sink.c` / `rtcm_monitor.c` / `upstream.c` / `components/ntripcaster`（Zig）
 
-- `rtcm_sink.c` / `rtcm_monitor.c` / `components/ntripcaster`（Zig caster）
+### コンソール / 画面リファレンス
 
-### 新規
+コンソール（`tab5>`、USB-Serial-JTAG）:
+| 分類 | コマンド |
+|---|---|
+| 測位/SBF | `stats` `sbf` `usb` `nmea` `touch` |
+| 受信機 | `mosaic <cmd>` `nmeaout`（COM1設定表示）`ntrip`/`ntripset`/`ntripreset` |
+| 均平 | `survey [add\|clear\|fit]` `record <perim\|field\|stop>` `vol` `flat` `cutfill` |
+| 画面/検証 | `screen <work\|map>` `demofield`（合成圃場）`log [start\|stop]` |
+| 設定 | `wifiset` `wifireset` `webadmin` |
 
-- SBF パーサ（PVTGeodetic / AttEuler / DOP / ReceiverStatus）
-- 測量点群の収集と土量バランス平面の算出
-- cut/fill 表示画面
-- microSD ロガー
+画面遷移: **作業**（cut/fill 大数字＋縦ライトバー＋Perim/Field/Stop・Flat/Fit/Clear・Map>）
+⇄ **MAP**（境界＋cut/fill ヒートマップ＋現在位置＋土量、< Work / Vol / Cfg>）
+→ **設定**（COM1 NMEA の message×rate、< Work / Apply）
 
 ## 先に潰しておくべきリスク
 
@@ -93,11 +105,16 @@ RTK の垂直誤差は水平の約2倍で、**実効 ±2cm 程度**。
 トラクター上で使うので、大きい数値・高コントラスト配色が要る。
 Tab5 は 720x1280 の縦長パネル。
 
-## 実機で確認が必要な残件
+## 実機で確認済み（2026-08）
 
-- **pitch → roll の切り替わり**。`setAttitudeOffset, 90, 0` を入れたが、ASCII 画面のラベルは
-  静的なので判定できなかった。アンテナを繋いで測位させ、**AttEuler ブロックの
-  Pitch / Roll のどちらが Do-Not-Use でないか**を見る
-- ステータス行の `ERROR: SW,` が測位状態で消えるか
-- SBF の実効レート（3秒窓で 24 ブロック = 約 8Hz だった。`msec100` 設定なので
-  10Hz のはずで、キャプチャの端の影響と思われるが、測位状態で再確認）
+- 0x8231 enumerate → itf0 SBF latch、crc_fails=0、NTRIP→**RTK fixed**（hAcc 2cm/vAcc 4cm）
+- 3画面タッチ UI 全操作、record→vol の配線、COM1 NMEA 設定の保存・受信機反映
+- SBF 実効レート ~10Hz（`msec100`）で安定
+
+## 実機で確認が必要な残件（2アンテナ + 屋外 or HW）
+
+- **pitch → roll の切り替わり**。ベンチでは AttEuler が Do-Not-Use（2アンテナ収束が要る）。
+  屋外で測位させ、AttEuler の Pitch/Roll どちらが有効か（`setAttitudeOffset,90,0` 済み）
+- `ReceiverStatus.rx_error`（ベンチで 0x8 = `ERROR: SW,`）が 2アンテナ屋外で消えるか
+- **microSD マウント**（HW blocker）: カードは CMD 応答するがデータ線ゼロ（`logger.c` 参照）
+- 実圃場で `record perim`→走行→`record field`→`survey fit`→`vol` の実測

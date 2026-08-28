@@ -7,13 +7,16 @@
 
 > ## 現在の状態（2026-08）
 >
-> **client のコア実装まで完了し、ESP-IDF 5.4.4/esp32p4 でクリーンビルドする。**
-> caster 半分は削除済み。USB→SBF パース→cut/fill 表示（土量バランス平面）と、
-> 受信機へ補正を流す NTRIP client まで実装済み。**実機へのブリングアップは未検証**
-> （次にやることは [`docs/todo.md`](docs/todo.md) の 1 番）。
+> **実機（Tab5 + P3H）で通し動作。** ESP-IDF 5.4.4/esp32p4 でクリーンビルド。
+> USB→SBF パース→cut/fill、NTRIP client→受信機へ補正→**RTK fixed**（hAcc 2cm/vAcc 4cm）。
+> **3画面タッチ UI**（作業 ⇄ 平面図MAP ⇄ NMEA設定）、外周走行→バランス平面→**切土/盛土 m³**、
+> COM1 から RS232 で外部機器へ NMEA 出力（液晶＋NVS 設定）まで実装・実機確認済み。
 >
-> 純ロジック層（SBF パーサ / cut/fill）は受信機も ESP-IDF も無しに
-> `tools/*_selftest.c` をホストの gcc でビルドして全数検証できる。
+> **残**: microSD ロガーはコード完成だが SD マウントが HW blocker で未解決。実機は
+> 2アンテナ屋外での pitch/roll・実圃場での土量測定が残（[`docs/todo.md`](docs/todo.md)）。
+>
+> 純ロジック層（SBF パーサ / cut-fill / 土量）は受信機も ESP-IDF も無しに
+> `tools/*_selftest.c` をホストの gcc でビルドして全数/解析検証できる。
 >
 > このリポジトリは tab5-caster の **clone**（fork ボタンではない。GitHub の fork は
 > public repo を private にできないため）。upstream 追跡は残してある:

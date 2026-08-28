@@ -22,41 +22,58 @@ git remote -v
 
 ## 2. まず読む
 
-`CLAUDE.md` → `docs/todo.md` の順。`docs/hardware-findings.md` は実機実測の一次情報で、
-推測が混じっていないので信用してよい。
+`CLAUDE.md` → `docs/todo.md` → `docs/design.md`（モジュール地図・コマンド一覧）の順。
+`docs/hardware-findings.md` は実機実測の一次情報。
 
-## 3. 実機が無くても進められる
+## 3. 実機が無くても進められる（純ロジックはホスト検証）
 
-`tests/fixtures/` に実機から採取した本物のバイト列がある。
-**SBF パーサは受信機なしで全数検証できる**ので、そこから始めるのが効率的。
+`tests/fixtures/` に実機採取のバイト列。パーサ/土量ロジックは受信機も ESP-IDF も無しに
+ホストの gcc/python で全数・解析検証できる:
 
 ```
-pwsh .\tools\parse-sbf.ps1   -Path .\tests\fixtures\mosaic-g5-p3h-sbf.bin   -Seconds 12.01
-pwsh .\tools\parse-rtcm3.ps1 -Path .\tests\fixtures\eniwa-bd982-rtcm3.bin   -Seconds 8
+cc -Imain tools/sbf_selftest.c      main/sbf_parser.c -lm && ./a.out tests/fixtures/mosaic-g5-p3h-sbf.bin
+cc -Imain tools/cutfill_selftest.c  main/cutfill.c    -lm && ./a.out
+cc -Imain tools/fieldmap_selftest.c main/fieldmap.c   -lm && ./a.out
+python3 tools/parse_sbf.py tests/fixtures/mosaic-g5-p3h-sbf.bin --seconds 12.01
 ```
 
-期待される出力（どちらも CRC 失敗ゼロ・パディング無し）:
+SBF の期待出力（CRC 失敗ゼロ・パディング無し）:
 
 ```
 bytes: 20856   CRC-valid blocks: 354   CRC-failed: 0   frame bytes: 20856 / 20856
-  4001  DOP              rev0 len=32   x114  (10 Hz)
-  4007  PVTGeodetic      rev2 len=96   x114  (10 Hz)
-  4014  ReceiverStatus   rev1 len=104  x12   ( 1 Hz)
-  5938  AttEuler         rev0 len=44   x114  (10 Hz)
-
-bytes: 3328    CRC-valid frames: 27   CRC-failed: 0   frame bytes: 3328 / 3328
-  1006/1008/1033 x1 ずつ、1074/1094/1124 x8 ずつ (1 Hz)
+  4001 DOP x114 / 4007 PVTGeodetic x114 / 4014 ReceiverStatus x12 / 5938 AttEuler x114
 ```
 
-## 4. ビルド環境（実機に焼く段階になったら）
+（Windows で `pwsh .\tools\parse-sbf.ps1` / `parse-rtcm3.ps1` も同結果。RTCM3 は
+`eniwa-bd982-rtcm3.bin` を parse-rtcm3 で 27 frames/CRC0）
 
-ESP-IDF **5.4.4 以降**が必要。
+## 4. ビルド & 焼き
 
-- Windows: https://dl.espressif.com/dl/esp-idf/ のインストーラ
-- `idf.py set-target esp32p4` → `idf.py build flash monitor`
+ESP-IDF **5.4.4**。Zig 依存は無い（caster 除去済み）。**この開発機では `~/esp/esp-idf`
+に導入済み**（別マシンなら https://dl.espressif.com/dl/esp-idf/ から 5.4.4）。
 
-現状はまだ caster のコードなので Zig 製 `ntripcaster` を `~/ntripcaster` に clone する
-必要がある。`docs/todo.md` の 2 番（caster 半分の削除）を先にやれば不要になる。
+```
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32p4                 # 初回のみ
+idf.py -p /dev/ttyACM0 build flash monitor
+```
+
+Tab5 は USB-Serial-JTAG（`303a:1001`）で `/dev/ttyACM0`。フラッシュ後の起動ログに
+`Mosaic SBF output provisioned` / `RTK fixed` が出れば通し動作。
+
+## 5. 実機での確認手順（コンソール = `tab5>`）
+
+```
+stats            # SBF ブロック数 + fix (RTK fixed が出るか)
+sbf              # PVT/Att/DOP/RxStatus のデコード値
+ntrip            # NTRIP client の接続 + 受信バイト
+demofield        # 合成圃場をロード（走行せず地図/土量を確認）
+screen map       # 平面図 MAP へ / screen work で戻る
+vol              # 切土/盛土 m3
+nmeaout          # COM1 NMEA 設定
+```
+
+実圃場: `record perim`→外周走行→`record field`→内部走行→`survey fit`→`vol`。
 
 ## 5. 実機を繋ぐ場合
 

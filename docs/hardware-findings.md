@@ -135,6 +135,37 @@ rover 側は無改造で恩恵を受ける**。BD982 の世代次第なので要
 
 ## 3. 開発環境（この PC）
 
-- git 2.47.1 / Python 3.13.2 — あり
-- **ESP-IDF — 未インストール**（tab5-client のビルドには 5.4.4 以降が必要）
-- Zig — なし（caster 専用なので tab5-client では不要）
+- git / Python — あり
+- **ESP-IDF 5.4.4 — `~/esp/esp-idf` に導入済み**（toolchain riscv32-esp-elf、cmake/ninja は
+  python_env の pip 経由で PATH に乗る）。ビルド: `. ~/esp/esp-idf/export.sh && idf.py ...`
+- Zig — 不要（caster 除去済み）
+
+## 4. 実機ブリングアップで判明（2026-08、Tab5 + P3H, /dev/ttyACM0）
+
+### 測位
+- 0x8231 enumerate → itf0 で SBF latch、crc_fails=0、NTRIP→**RTK fixed** 到達
+- **hAcc 0.020 m / vAcc 0.040 m**（＝水平±2cm・垂直その倍、設計想定通り）
+- SBF 実効 ~10Hz（`msec100`）で安定
+
+### USB sweep（重要）
+- **SBF は USB1=itf0 のみ**。sweep に itf2 を入れると、itf2 を開いている `nmea_source` と
+  衝突して "EP with 4 address already allocated" → USB ホストが wedge し fix が戻らない。
+  → `usb_cdc_source.c` の `MOSAIC_COM_ITFS` は `{0}` 固定
+
+### タッチ（ST7123 @ 0x55）
+- Tab5(新版)のタッチは **ST7123**（GT911 ではない）。
+- **報告テーブルを最後の点まで読まないと INT が clear されず座標が固定値**になる
+  （`touch.c` READ_LEN=全点=74B）。指の有無ビットは正しく取れるので、活動検出だけなら
+  1点読みでも動くが、座標は死ぬ
+- raw 座標は **0..~720（左→右）/ 0..~1280（上→下）**、720×1280 パネルに **1:1（swap/flip 無し）**
+
+### microSD（⚠未解決）
+- 配線は M5 公式 BSP: SDMMC slot0 **4bit / CLK=43 CMD=44 D0-3=39-42 / 電源 on-chip LDO ch4**
+- 現象: カードは **CMD 応答（CID: MANF 0x92 読取）するがデータ線読み取りが全ゼロ**
+  （`SCR: sd_spec=0 bus_width=0`）→ `FR_NO_FILESYSTEM(13)`。FAT32 化後も 4bit/1bit・
+  LDO 有無すべて失敗。内蔵 LDO は "voltage 0 out of [500,2700]" 警告
+- = 給電されコマンドは通るがデータ転送が失敗。**Tab5 SD の電源/信号統合**の問題（要 HW 調査）
+
+### その他
+- P4 は**単精度 FPU・倍精度ソフトfloat**。地図/土量の MLS 補間を double で回すと
+  再描画が ~5s → task watchdog。→ float 化（`fieldmap.c`）

@@ -3,14 +3,29 @@
 ## このプロジェクトは何か
 
 トラクター装着型の**均平作業機**で RTK 測位し、M5Stack Tab5 (ESP32-P4) の液晶に
-**切土 / 盛土（cut / fill）**を表示する機材。受信機は Septentrio **mosaic-go G5 P3H**、
-補正は自前の Trimble BD982 基準局（`rtk.toiso.fit:2101/eniwa-bd982`）から NTRIP で取る。
-ブレードの油圧自動制御はスコープ外（表示のみ）。
+**切土 / 盛土（cut / fill）**と圃場の**平面図・土量**を表示する機材。受信機は Septentrio
+**mosaic-go G5 P3H**、補正は自前の Trimble BD982 基準局
+（`rtk.toiso.fit:2101/eniwa-bd982`）から NTRIP で取る。ブレードの油圧自動制御はスコープ外
+（表示のみ）。
 
-[tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の **clone** から
-派生。caster 半分は削除済みで、USB→SBF→cut/fill の client データ経路 + NTRIP client
-まで実装され **ESP-IDF 5.4.4/esp32p4 でクリーンビルドする**（実機ブリングアップは未：
-`docs/todo.md` の 1 番）。`upstream` remote で tab5-caster を追跡している。
+[tab5-caster](https://github.com/yasunorioi/tab5-caster)（基準局箱）の **clone** から派生。
+caster 半分は削除済み。`upstream` remote で tab5-caster を追跡している。
+
+## 現在の状態（2026-08）
+
+**実機（Tab5 + P3H, /dev/ttyACM0）で通し動作している。** ESP-IDF 5.4.4/esp32p4 で
+クリーンビルド。
+
+- USB→SBF パース→cut/fill / NTRIP client→受信機へ RTCM3 → **RTK fixed**（hAcc 2cm/vAcc 4cm）
+- **3画面タッチ UI**: 作業画面（cut/fill 大数字＋ライトバー＋録画/平面ボタン）⇄
+  平面図 MAP（境界＋cut/fill ヒートマップ＋現在位置＋土量）⇄ NMEA 設定（COM1 出力、NVS 保存）
+- 外周走行→バランス平面→**切土/盛土 m³** まで算出
+- COM1 から RS232 で GGA/NMEA を外部機器へ（設定は液晶＋NVS）
+
+**未解決/残:**
+- microSD CSV ロガーは**コード完成だが SD マウントが通らない**（HW blocker、
+  `main/logger.c` の `mount_sd()` コメント参照）
+- 実機ブリングアップ残: 2アンテナ屋外での pitch/roll・`rx_error`、実圃場での `record`→`vol`
 
 ## 応答は日本語で
 
@@ -19,73 +34,76 @@
 
 ## 最初に読むもの
 
-1. **`docs/todo.md`** — 次にやること。ここから始める
-2. `docs/hardware-findings.md` — 実機実測の一次情報。推測ではなく実際の応答
-3. `docs/design.md` — 決定事項と組み替え方針
-4. `docs/handoff.md` — 新しいマシンでの立ち上げ手順
+1. **`docs/todo.md`** — 次にやること（phase 区切り）。ここから始める
+2. `docs/design.md` — 決定事項・アーキテクチャ・モジュール地図・コンソール/画面リファレンス
+3. `docs/hardware-findings.md` — 実機実測の一次情報（P3H の USB/permission/SBF、タッチ、SD）
+4. `docs/handoff.md` — 別マシンでのビルド/焼き/検証手順
 
-## 絶対に踏んではいけない罠
+## 絶対に踏んではいけない罠 / 設計上の要点
 
 ### 1. この P3H は rover 専用で RTCM3 を出力できない
+permission に `RTKBase`/`DGNSSBase` が無く、RTCM3 は `setRTCMv3Usage`＝**入力専用**。
+基準局には使えない。RTCM3 は NTRIP client から USB 経由で受信機へ**流し込む**だけ。
 
-permission に `RTKBase` / `DGNSSBase` が無く、コマンドツリーに RTCM3 **出力**が存在しない
-（`setRTCMv3Output` は `$R? Invalid command!`）。**基準局には使えない。**
-「mosaic だから tab5-caster がそのまま動くはず」は誤り。RTCM3 は `setRTCMv3Usage` = 入力専用。
+### 2. USB: SBF は itf0 のみ。sweep に itf2 を足すな
+この個体は **PID 0x8231 / CDC 2本（USB1=itf0=SBF, USB2=itf2=NMEA）/ MSC 無し**。
+SBF は itf0 にだけ出る。`usb_cdc_source.c` の sweep に itf2 を入れると **nmea_source が
+開いている itf2 と衝突**して "EP already allocated" で USB ホストが wedge し、fix が
+二度と戻らなくなる（実際に踏んだ）。VID/PID は `main/mosaic_usb.h` に一本化済み。
 
-### 2. USB の値が tab5-caster のハードコードと違う
+### 3. NTRIP キャスターは `Transfer-Encoding: chunked`
+素通しすると chunk サイズ文字列が RTCM3 に混入し CRC がランダムに落ちる。
+`ntrip_client.c` は `esp_http_client` のストリーミングで de-chunk 済み。
 
-| | この個体 | tab5-caster のコード |
-|---|---|---|
-| PID | **`0x8231`** | `0x85C0` |
-| CDC COM | **2本**（USB1=itf0 / USB2=itf2） | `{0, 2, 4}` の3本 |
-| MSC (itf6) | **無し** | 有る前提 |
-| itf0 | **コマンドに応答する** | 「両方向 silent」と README に記載 |
+### 4. 高さは NMEA GGA ではなく SBF `PVTGeodetic` の楕円体高
+圃場内の相対比較なのでジオイド不要。cut/fill・土量はすべてこの楕円体高基準。
 
-加えて `main/usb_cdc_source.c` の sweep ループに、`cdc_acm_host_open` 失敗時に `sweep` を
-進めず `continue` するため**存在しない itf で無限リトライして他へ戻れないバグ**がある。
-VID/PID は `usb_cdc_source.c` と `nmea_source.c` に**重複定義**されている（両方直すこと）。
+### 5. USB-A の VBUS は I/O エキスパンダでゲート
+`board_power.c`（PI4IOE5V6408 #2, I2C `0x44`, P3=USB5V_EN, active-high）。**消すな。**
 
-### 3. NTRIP キャスターは `Transfer-Encoding: chunked` で返す
+### 6. ST7123 タッチは報告テーブルを最後の点まで読む
+`touch.c` の READ_LEN は全点（74B）。1点だけ読むと INT が clear されず座標が固定値に
+なる（较正で発覚）。raw 座標は 720×1280 パネルに 1:1（swap/flip 無し）。
 
-素通しすると chunk サイズのヘッダ文字列が RTCM3 に混入し、**CRC がランダムに落ちる**
-（原因が掴みにくい壊れ方）。`esp_http_client` のストリーミングモードを使えば剥がしてくれる。
-生ソケットで書くなら自前で de-chunk が必須。
+### 7. 地図/土量の MLS 補間は float
+esp32p4 は単精度 FPU・倍精度ソフトfloat。`fieldmap.c` の MLS を double で回すと
+地図再描画が ~5s かかり **task watchdog** を踏む。float 化済み（ホスト検証は誤差内で一致）。
 
-### 4. 高さは NMEA GGA ではなく SBF `PVTGeodetic` の楕円体高を使う
-
-圃場内の相対比較なのでジオイド不要。GGA は標高（ジオイド補正後）かつ桁数もモード情報も足りない。
-
-### 5. USB-A の VBUS は I/O エキスパンダでゲートされている
-
-`board_power.c`（PI4IOE5V6408 #2, I2C `0x44`, P3 = USB5V_EN, active-high）を叩かないと
-受信機が enumerate しない。**この処理は消さないこと。**
+### 8. NMEA stream 番号は SBF と別系
+`setNMEAOutput` のストリームは SBF と独立。COM1 出力=Stream2、パネル NMEA=Stream1 で
+非衝突（`mosaic_config.c`）。
 
 ## 実機が無くてもできること
 
-`tests/fixtures/` に**実機から採取した本物のバイト列**がある（CRC 全数検証済み）。
-SBF パーサと RTCM3 パーサはこれで完全に検証できるので、**受信機もキャスターも
-ESP-IDF も無い状態で書き始められる**。詳細は `tests/fixtures/README.md`。
-
-`tools/*.ps1` に採取・検証用スクリプトがある。実機がある場合はそれで再採取できる。
-
-> ⚠ フィクスチャは**アンテナ未接続の屋内**で採取したもの。測位解は無効なので、
-> フレーミングと CRC の検証には使えるが、**値の妥当性検証には使えない。**
-
-## ビルド
-
-ESP-IDF **5.4.4 以降**。
+`tests/fixtures/` に実機採取のバイト列（CRC 全数検証済み）。純ロジックはホストの gcc で
+全数/解析検証できる:
 
 ```
-idf.py set-target esp32p4
-idf.py build flash monitor
+cc -Imain tools/sbf_selftest.c     main/sbf_parser.c  -lm && ./a.out tests/fixtures/mosaic-g5-p3h-sbf.bin
+cc -Imain tools/cutfill_selftest.c main/cutfill.c     -lm && ./a.out
+cc -Imain tools/fieldmap_selftest.c main/fieldmap.c   -lm && ./a.out
+python3 tools/parse_sbf.py tests/fixtures/mosaic-g5-p3h-sbf.bin --dump 1
 ```
 
-現状はまだ caster のコードなので、Zig 製 `ntripcaster` を `~/ntripcaster` に
-別途 clone する必要がある（`components/ntripcaster` は vendoring していない）。
-**tab5-client では caster を落とすので、この依存は消える予定**（`docs/todo.md` の 2 番）。
+> ⚠ フィクスチャは**屋内・アンテナ未接続**で採取。測位解は無効なので framing/CRC/
+> デコード配置の検証には使えるが、値の妥当性検証には使えない。
+
+## ビルド / 焼き
+
+ESP-IDF **5.4.4**（この開発機では `~/esp/esp-idf` に導入済み）。Zig 依存は無い
+（caster 除去済み）。
+
+```
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32p4      # 初回のみ
+idf.py -p /dev/ttyACM0 build flash monitor
+```
+
+コンソール（USB-Serial-JTAG, `tab5>`）主要コマンド: `stats`/`sbf`/`usb`/`nmea`/`mosaic`/
+`survey`/`record`/`vol`/`flat`/`fit`/`cutfill`/`screen`/`demofield`/`ntrip`/`nmeaout`/`log`/
+`wifiset`/`touch`。詳細は `docs/design.md`。
 
 ## 精度についての注意
 
-RTK の垂直誤差は水平の約2倍で **実効 ±2cm 程度**。**レーザーレベラー（±5mm）とは別物。**
-案件の要求仕様と突き合わせが済んでいない。ここが崩れると設計面の話が全部無駄になるので、
-実装を進める前にユーザーに確認状況を聞くこと。
+RTK の垂直誤差は水平の約2倍で **実効 ±2cm 程度**（実機で vAcc 4cm 実測）。
+レーザーレベラー（±5mm）とは別物。**発注元と ±2cm で十分と合意済み。**
