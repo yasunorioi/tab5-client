@@ -45,11 +45,27 @@ static char     s_path[40];
 
 static esp_err_t mount_sd(void)
 {
+    // Config faithful to M5Stack's Tab5 BSP (slot 0, 4-bit, on-chip LDO ch4 @3.3V).
+    //
+    // ⚠ BLOCKED on this unit (2026-08): the card answers CMD (CID reads: MANF 0x92)
+    // but every DATA-line read returns zeros (SCR sd_spec=0 bus_width=0), so mount
+    // fails with FR_NO_FILESYSTEM (13) even on a freshly FAT32-formatted card, in
+    // both 4-bit and 1-bit, with and without the pwr_ctrl LDO. The on-chip LDO also
+    // warns "voltage 0 out of [500,2700]". Symptoms = the card is powered enough to
+    // answer commands but data transfer fails — a Tab5 SD power/signal integration
+    // detail, NOT a logic bug (this file matches M5's BSP). To resolve, next session:
+    //   - reseat / try a known-good card first (cheapest check)
+    //   - confirm whether SD VDD is the on-chip LDO or a board rail + an I/O-expander
+    //     enable (cf. board_power.c USB5V_EN); the P4 internal LDO may not reach 3.3V
+    //   - diff init order/sdkconfig against a WORKING M5Tab5-UserDemo build
+    esp_err_t err;
     sd_pwr_ctrl_ldo_config_t ldo_cfg = { .ldo_chan_id = SD_LDO_CHAN };
-    esp_err_t err = sd_pwr_ctrl_new_on_chip_ldo(&ldo_cfg, &s_pwr);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SD LDO init failed: %s", esp_err_to_name(err));
-        return err;
+    if (s_pwr == NULL) {
+        err = sd_pwr_ctrl_new_on_chip_ldo(&ldo_cfg, &s_pwr);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "SD LDO init failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
