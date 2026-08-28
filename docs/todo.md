@@ -35,10 +35,15 @@
 - [x] COM1 NMEA を液晶設定（message×rate）→ NVS 保存 → `mosaic_provision` が起動時再送
       （`main/settings_view.c` + `mosaic_config.c`。パネル操作→保存→受信機反映を確認）
 
-### Phase D — microSD ロガー（次はここ）
-- [ ] PVT/Att + cut/fill + 土量を microSD に記録（作業ログ・証跡）
-- [ ] 記録フォーマット（CSV or SBF/NMEA 生ログ）を決める
-- [ ] Tab5 の microSD スロット配線（SDMMC/SPI）を確認
+### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
+- [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を
+      `/sdcard/leveler_NNN.csv` に記録。`log [start|stop]` コマンド。カード有れば自動開始
+- [x] Tab5 SD 配線確定（M5 BSP: SDMMC slot0 4bit、CLK43/CMD44/D0-3=39-42、LDO ch4）
+- [ ] **⚠ SD マウントが通らない**（次セッションで HW 調査）。カードは CMD 応答するが
+      データ線が全ゼロ(SCR=0)→ FR_NO_FILESYSTEM(13)。FAT32・4bit/1bit・LDO 有無すべて失敗。
+      内蔵 LDO "voltage 0 out of [500,2700]" 警告。`logger.c` の mount_sd() コメントに
+      調査手順（良品カード再確認 / SD VDD の給電経路 / 動作 M5 demo との差分）を記載
+- [ ] マウント解決後: 実機で `log` の rows 増加 + CSV 内容確認
 
 ## 実機ブリングアップ 残（2アンテナ + 屋外が要る）
 - [ ] **pitch / roll**。ベンチでは AttEuler が Do-Not-Use（2アンテナ収束が必要）。
