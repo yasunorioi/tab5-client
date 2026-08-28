@@ -23,27 +23,22 @@
 
 ## これから（phase 区切り・この順で実装）
 
-### Phase A — 平面図（plan-view MAP）画面
-docs/design.md の画面仕様「大きい数値 + 色 + **平面図** + RTK ステータス」の平面図部分。
-- [ ] LVGL キャンバスに **圃場境界ポリゴン**を描画（fieldmap の boundary）
-- [ ] **cut/fill ヒートマップ**（グリッド各セルを CUT=橙/FILL=青/ON GRADE=緑で塗る）
-- [ ] **現在位置**マーカー（PVT を E/N に投影して重畳）
-- [ ] **土量合計**の表示（cut/fill/net m³ + 面積）
-- [ ] E/N → 画面座標のスケーリング（境界 bbox にフィット、縦横比維持）
+### Phase A — 平面図（plan-view MAP）画面 ✅（実機確認済み）
+- [x] 圃場境界ポリゴン + cut/fill ヒートマップ + 現在位置 + 土量合計 + bbox フィット
+      （`main/map_view.c`。MLS は float 化で watchdog 回避）
 
-### Phase B — on-panel ボタン + 画面遷移
-今 record/vol はコンソールのみ。作業画面 ⇄ MAP 画面をボタンで切替。
-- [ ] `Rec 外周` / `Rec 内部` / `停止` ボタン（leveler_record_set）
-- [ ] `土量計算` ボタン（leveler_compute_volumes）
-- [ ] 作業画面 ⇄ MAP ⇄ 設定 のナビゲーション（LVGL screen 切替 or tabview）
+### Phase B — on-panel ボタン + 画面遷移 ✅（実機確認済み）
+- [x] Perim/Field/Stop（録画・緑ハイライト）/ Flat/Fit/Clear/Map> / MAP の Work・Vol
+- [x] 作業 ⇄ MAP ⇄ 設定 のナビゲーション
 
-### Phase C — NMEA 出力設定画面（NVS 永続化）
-液晶で message(GGA/GSV/GSA/RMC/VTG/ZDA)×port(COM1/USB2/OFF)×rate(OFF/1/2/5/10Hz)。
-- [ ] 設定 UI（行ごとに port + rate）
-- [ ] NVS 保存 → `mosaic_provision` が起動時に再送（今の COM1 GGA ハードコードを置換）
+### Phase C — NMEA 出力設定画面（NVS 永続化）✅（実機確認済み）
+- [x] COM1 NMEA を液晶設定（message×rate）→ NVS 保存 → `mosaic_provision` が起動時再送
+      （`main/settings_view.c` + `mosaic_config.c`。パネル操作→保存→受信機反映を確認）
 
-### Phase D — microSD ロガー
+### Phase D — microSD ロガー（次はここ）
 - [ ] PVT/Att + cut/fill + 土量を microSD に記録（作業ログ・証跡）
+- [ ] 記録フォーマット（CSV or SBF/NMEA 生ログ）を決める
+- [ ] Tab5 の microSD スロット配線（SDMMC/SPI）を確認
 
 ## 実機ブリングアップ 残（2アンテナ + 屋外が要る）
 - [ ] **pitch / roll**。ベンチでは AttEuler が Do-Not-Use（2アンテナ収束が必要）。
