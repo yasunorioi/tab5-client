@@ -22,13 +22,7 @@
 > 純ロジック層（SBF パーサ / cut-fill / 土量）は受信機も ESP-IDF も無しに
 > `tools/*_selftest.c` をホストの gcc でビルドして全数/解析検証できる。
 >
-> このリポジトリは tab5-caster の **clone**（fork ボタンではない。GitHub の fork は
-> public repo を private にできないため）。upstream 追跡は残してある:
->
-> ```
-> git remote -v
->   upstream  https://github.com/yasunorioi/tab5-caster.git
-> ```
+> [tab5-caster](https://github.com/yasunorioi/tab5-caster) から派生（`upstream` remote で追跡）。
 
 ## ドキュメント
 
