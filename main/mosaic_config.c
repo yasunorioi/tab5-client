@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "usb_cdc_source.h"
 
@@ -167,84 +169,93 @@ static bool buf_contains(const char *hay, size_t len, const char *needle)
     return false;
 }
 
-// Best-effort: enable GGA+GSV on USB2 for the panel's GNSS view. Sent on the
-// command channel (USB1/itf2); targets USB2 by name. Logs only — a failure here
-// costs the display feature, never the RTCM3 caster path.
-static void provision_nmea(void)
+// Retries for a provisioning command. Right after the receiver powers on, its USB
+// OUT endpoint NAKs for several seconds (TX times out) and early commands are
+// lost. Retrying absorbs that settling: the FIRST provisioning command spins here
+// until the Mosaic answers, after which the rest ack on the first try. Live
+// (already-running) callers pass tries=1.
+#define PROVISION_TRIES 14
+
+// Send a command and wait for the Mosaic to acknowledge it. Returns ESP_OK on a
+// "$R:" ack, ESP_FAIL on a "$R?" reject, ESP_ERR_INVALID_STATE if no interface is
+// open, or ESP_ERR_TIMEOUT if no reply came within `tries` attempts. A reply is
+// only cleanly readable in the quiet window (before SBF streams); once the box is
+// streaming, ack detection is unreliable, so live callers use tries=1 and treat
+// the result loosely.
+static esp_err_t send_acked(const char *cmd, int tries)
+{
+    char reply[256];
+    esp_err_t last = ESP_ERR_TIMEOUT;
+    for (int i = 0; i < tries; i++) {
+        size_t n = 0;
+        esp_err_t err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 1500);
+        if (err == ESP_ERR_INVALID_STATE) return err;   // no interface open
+        if (err == ESP_OK && n > 0) {
+            if (buf_contains(reply, n, "$R?")) return ESP_FAIL;   // processed: reject
+            if (buf_contains(reply, n, "$R:")) return ESP_OK;     // processed: ack
+        }
+        last = err;
+        if (i + 1 < tries) vTaskDelay(pdMS_TO_TICKS(400));
+    }
+    return last;
+}
+
+// Enable GGA+GSV on USB2 for the panel's GNSS view. Targets USB2 by name. A
+// failure here costs the display feature, never the RTCM3 caster path.
+static void provision_nmea(int tries)
 {
     char cmd[128];
     snprintf(cmd, sizeof(cmd),
              "setNMEAOutput, " NMEA_STREAM ", " NMEA_PORT ", " NMEA_MSGS ", " NMEA_RATE);
-    char reply[256];
-    size_t n = 0;
-    esp_err_t err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "NMEA provision TX failed: %s", esp_err_to_name(err));
-        return;
-    }
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected the NMEA config ($R?)");
-        return;
-    }
-    ESP_LOGI(TAG, "Mosaic NMEA output provisioned on " NMEA_PORT " (" NMEA_MSGS ")");
+    if (send_acked(cmd, tries) == ESP_OK)
+        ESP_LOGI(TAG, "Mosaic NMEA output provisioned on " NMEA_PORT " (" NMEA_MSGS ")");
+    else
+        ESP_LOGW(TAG, "Mosaic NMEA (USB2) provision did not ack");
 }
 
-// Send a port's NMEA output command built from (enabled,msgs,rate). Returns the
-// receiver result. Best-effort at boot; also used by the live apply path.
+// Send a port's NMEA output command built from (enabled,msgs,rate). Best-effort at
+// boot (tries=PROVISION_TRIES); also used by the live apply path (tries=1).
 static esp_err_t send_com_nmea(mosaic_com_t port, bool enabled, uint16_t msgs,
-                               uint8_t rate)
+                               uint8_t rate, int tries)
 {
-    char cmd[160], reply[256];
-    size_t n = 0;
+    char cmd[160];
     build_nmea_cmd(port, enabled, msgs, rate, cmd, sizeof(cmd));
-    esp_err_t err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "%s NMEA TX failed: %s", COM_PORTS[port].com,
+    esp_err_t err = send_acked(cmd, tries);
+    if (err == ESP_OK)
+        ESP_LOGI(TAG, "Mosaic %s NMEA provisioned (%s)", COM_PORTS[port].com,
+                 enabled ? mosaic_nmea_rate_str(rate) : "OFF");
+    else
+        ESP_LOGW(TAG, "Mosaic %s NMEA output not acked: %s", COM_PORTS[port].com,
                  esp_err_to_name(err));
-        return err;
-    }
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected %s NMEA output ($R?)", COM_PORTS[port].com);
-        return ESP_FAIL;
-    }
-    ESP_LOGI(TAG, "Mosaic %s NMEA provisioned (%s)", COM_PORTS[port].com,
-             enabled ? mosaic_nmea_rate_str(rate) : "OFF");
-    return ESP_OK;
+    return err;
 }
 
-// Set a port's serial baud (8N1). Best-effort; the COM ports are distinct from
-// our USB1 command channel, so changing their baud never disturbs the SBF path.
-static esp_err_t send_com_settings(mosaic_com_t port, uint8_t baud)
+// Set a port's serial baud (8N1). The COM ports are distinct from our USB1 command
+// channel, so changing their baud never disturbs the SBF path.
+static esp_err_t send_com_settings(mosaic_com_t port, uint8_t baud, int tries)
 {
     if (baud >= NMEA_BAUD_COUNT) baud = NMEA_BAUD_DEF;
-    char cmd[128], reply[256];
-    size_t n = 0;
+    char cmd[128];
     snprintf(cmd, sizeof(cmd), "setCOMSettings, %s, %s",
              COM_PORTS[port].com, NMEA_BAUD_CMD[baud]);
-    esp_err_t err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "%s settings TX failed", COM_PORTS[port].com);
-        return err;
-    }
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected setCOMSettings %s ($R?) — continuing",
-                 COM_PORTS[port].com);
-    }
-    return ESP_OK;
+    esp_err_t err = send_acked(cmd, tries);
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "%s setCOMSettings not acked: %s", COM_PORTS[port].com,
+                 esp_err_to_name(err));
+    return err;
 }
 
-// Best-effort: RS232 NMEA on both COM ports for external consumers (blade
-// controller / auto-steer), from the operator's saved config. Sets each port's
-// baud first (even when disabled, so a later live-enable needs no reboot), then
-// the NMEA output. Logs only — a failure here costs the RS232 feed, never the SBF
-// data path.
+// RS232 NMEA on both COM ports for external consumers (blade controller /
+// auto-steer), from the operator's saved config. Sets each port's baud first (even
+// when disabled, so a later live-enable needs no reboot), then the NMEA output.
+// Retries per command to ride out the receiver's post-power-on settling.
 static void provision_com_ports(void)
 {
     for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
         bool en; uint16_t msgs; uint8_t rate, baud;
         mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &msgs, &rate, &baud);
-        if (send_com_settings((mosaic_com_t)p, baud) != ESP_OK) continue;
-        send_com_nmea((mosaic_com_t)p, en, msgs, rate);
+        send_com_settings((mosaic_com_t)p, baud, PROVISION_TRIES);
+        send_com_nmea((mosaic_com_t)p, en, msgs, rate, PROVISION_TRIES);
     }
 }
 
@@ -263,12 +274,9 @@ esp_err_t mosaic_nmea_cfg_apply(mosaic_com_t port, bool enabled,
         nvs_commit(h);
         nvs_close(h);
     }
-    // Apply now if the receiver's command interface is open; otherwise it takes
-    // effect on the next provision (usb_cdc_send_command returns INVALID_STATE).
-    // Set the baud first, then the NMEA output.
-    esp_err_t err = send_com_settings(port, baud);
-    if (err == ESP_OK) err = send_com_nmea(port, enabled, msg_mask, rate);
-    return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;
+    // Persist only. A live setNMEAOutput is ignored once the SBF stream is up, so
+    // the config takes effect on the next boot-time provision (power-cycle the box).
+    return ESP_OK;
 }
 
 // All the auxiliary (non-SBF) outputs: panel NMEA on USB2 + RS232 NMEA on the COM
@@ -276,59 +284,53 @@ esp_err_t mosaic_nmea_cfg_apply(mosaic_com_t port, bool enabled,
 // the others.
 static void provision_aux_outputs(void)
 {
-    provision_nmea();
+    provision_nmea(PROVISION_TRIES);
     provision_com_ports();
 }
 
 esp_err_t mosaic_provision(void)
 {
-    // Apply the dual-antenna attitude offset first, then start the SBF stream.
-    // Both are RAM-only (no exeCopyConfigFile), re-applied every boot — the box
-    // stays the source of truth and the receiver's NVM is left untouched.
-    char reply[512];
-    size_t n = 0;
-    esp_err_t err = usb_cdc_send_command(ATT_OFFSET, reply, sizeof(reply), &n, 2000);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "attitude-offset TX failed: %s", esp_err_to_name(err));
+    // ORDER MATTERS. The Mosaic only applies commands while USB1 is quiet — once
+    // the SBF stream is running on USB1, further commands sent on that port are
+    // silently ignored (verified on the P3H: a live setNMEAOutput / setSBFOutput
+    // returns no $R: and has no effect). So we push EVERYTHING else first —
+    // attitude offset, panel NMEA on USB2, and the RS232 NMEA on COM1/COM2 — and
+    // start the SBF stream LAST. Config changes therefore only take effect through
+    // a fresh boot-time provision (power-cycle the box), never a live apply while
+    // RTK is streaming.
+    // Attitude offset. Retries ride out the receiver's post-power-on settling —
+    // this first command is where we absorb the ~10-15 s USB-endpoint NAK window;
+    // once it acks, the receiver is ready and the rest apply on the first try.
+    // A $R? here is non-fatal (attitude may already be set); continue either way.
+    esp_err_t err = send_acked(ATT_OFFSET, PROVISION_TRIES);
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "attitude-offset: no interface open");
         return err;
     }
-    // A $R? here is non-fatal (attitude may already be set); log and continue to
-    // the SBF output, which is the command that actually gates the data path.
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected setAttitudeOffset ($R?) — continuing");
-    }
-
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "setSBFOutput, " SBF_STREAM ", " SBF_PORT ", " SBF_MSGS ", " SBF_RATE);
-    n = 0;
-    err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "SBF provision TX failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    // Septentrio acks a good command with "$R:" and rejects with "$R?". Scan the
-    // raw capture (not a C-string — it may hold binary) for the error marker.
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected the SBF config ($R?)");
-        return ESP_FAIL;
-    }
-    if (n == 0) {
-        // The port accepted the bytes but answered nothing — it isn't the
-        // receiver's command interface. Signal the caller to retry on the next
-        // interface it opens.
+    if (err == ESP_ERR_TIMEOUT) {
+        // Never got a reply across all retries — this interface isn't the
+        // receiver's command port. Signal the sweep to hop to the next one.
         ESP_LOGW(TAG, "no reply on this interface — not a command port");
         return ESP_ERR_TIMEOUT;
     }
-    if (!buf_contains(reply, n, "$R:")) {
-        // Bytes but no ack — likely buried under SBF binary on an already-
-        // streaming port. The command almost certainly applied; best-effort OK.
-        ESP_LOGW(TAG, "no $R: ack in %u B reply (buried in stream?) — assuming applied", (unsigned)n);
-        provision_aux_outputs();
-        return ESP_OK;
+
+    // Auxiliary NMEA outputs (USB2 panel view + COM1/COM2 RS232) — sent BEFORE the
+    // SBF stream starts, so they land in the quiet window and actually apply.
+    provision_aux_outputs();
+
+    // Start the SBF stream LAST — this is the command that opens the data path.
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "setSBFOutput, " SBF_STREAM ", " SBF_PORT ", " SBF_MSGS ", " SBF_RATE);
+    err = send_acked(cmd, PROVISION_TRIES);
+    if (err == ESP_FAIL) {
+        ESP_LOGW(TAG, "Mosaic rejected the SBF config ($R?)");
+        return ESP_FAIL;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SBF provision not acked: %s", esp_err_to_name(err));
+        return err;
     }
     ESP_LOGI(TAG, "Mosaic SBF output provisioned on " SBF_PORT " (" SBF_MSGS " @" SBF_RATE ")");
-    provision_aux_outputs();
     return ESP_OK;
 }

@@ -81,10 +81,9 @@ const char *mosaic_com_name(mosaic_com_t port);
 void mosaic_nmea_cfg_get(mosaic_com_t port, bool *enabled, uint16_t *msg_mask,
                          uint8_t *rate, uint8_t *baud);
 
-// Persist a new NMEA config for a COM port to NVS and, if a CDC interface is
-// open, apply it to the receiver immediately (baud via setCOMSettings, then the
-// NMEA output — a disabled port sends "...none"). Returns the receiver's apply
-// result (ESP_OK if no interface is open yet — it takes effect on next provision).
+// Persist a new NMEA config for a COM port to NVS. Persist-only: the Mosaic ignores
+// commands once its SBF stream is up, so the change takes effect on the next
+// boot-time provision — i.e. after a power cycle of the box. Always returns ESP_OK.
 esp_err_t mosaic_nmea_cfg_apply(mosaic_com_t port, bool enabled,
                                 uint16_t msg_mask, uint8_t rate, uint8_t baud);
 

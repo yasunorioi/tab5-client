@@ -46,11 +46,21 @@
       機材に合わせ port 毎に選択→NVS(`baud`/`baud1`)保存→`setCOMSettings,COMx,baudN` で反映。
       設定画面が縦に伸びたので scroll(縦)可に。`nmeaout` に baud 表示追加
 - [x] `nmeaout` コンソールは両ポート表示に更新
-- [x] 実機(Tab5+P3H): `nmeaout` が baud=… を両ポート表示、受信機は
-      `setCOMSettings,COM2,baud{9600,115200,38400}` を拒否($R?)せず受理
-- [ ] **実機確認(残)**: パネルで COM2 を ON→Apply→受信機に `setNMEAOutput,Stream3,COM2,...`＋
-      選んだ baud が通り、COM2 の RS232 端子から実際に NMEA が出るか
-      （COM2 が RS232 トランシーバに配線されている前提。スコープ/ループバックで確認）
+
+### Phase C-3 — ★live コマンド不適用の根本原因 + provision 堅牢化 ✅（実機検証済み）
+発覚: パネルで COM2 を ON→Apply しても受信機に反映されず、COM2 から NMEA が出なかった。
+- [x] **原因特定**: Mosaic は SBF ストリーム開始後は USB1 のコマンドを無視する（$R: 無し）。
+      現状の provision は setSBFOutput を先に送っていたため、後続の COM1/COM2/USB2 NMEA は
+      毎回「効かない窓」で送られていた（RTCM3 は無関係と切り分け済み）
+- [x] **provision 順序修正**: attitude→USB2/COM1/COM2 NMEA→setSBFOutput(最後)。全設定を
+      静かな窓で適用（`mosaic_config.c`）
+- [x] **per-command リトライ**(`send_acked`/PROVISION_TRIES): 電源投入直後の USB NAK
+      (~10-15s settling) を最初のコマンドで吸収。実機で USB2/COM1/COM2/SBF 全て ack→latch 確認
+- [x] **TX 直列化**(`s_tx_lock`): RTCM3 と コマンドの同一 EP 競合を防止
+- [x] パネル Apply は NVS 保存のみ＋「power-cycle box to apply」。設定反映は**box 電源再投入**で。
+      ⚠ソフト適用は不可と判明: `esp_restart`=USB 再列挙不完全、VBUS カット=mosaic wedge（両撤去）
+- [ ] **実機確認(残)**: box 電源再投入後、COM2(38400) の端子に `$…GGA` が実際に出るか
+      （COM2 が RS232 トランシーバに配線されている前提。ターミナル/スコープを 38400 で）
 
 ### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
 - [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を

@@ -112,17 +112,13 @@ static void clear_status_cb(lv_timer_t *t)
 static void on_apply(lv_event_t *e)
 {
     (void)e;
-    // Commit both ports so edits made on either tab are persisted + applied.
-    esp_err_t err = ESP_OK;
-    for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
-        esp_err_t r = mosaic_nmea_cfg_apply((mosaic_com_t)p, s_en[p],
-                                            s_msgs[p], s_rate[p], s_baud[p]);
-        if (r != ESP_OK) err = r;
-    }
-    lv_label_set_text(s_status_lbl,
-                      err == ESP_OK ? "saved + applied to receiver"
-                                    : "saved (apply failed - see log)");
-    lv_timer_t *t = lv_timer_create(clear_status_cb, 3000, NULL);
+    // Persist both ports so edits made on either tab are saved.
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++)
+        mosaic_nmea_cfg_apply((mosaic_com_t)p, s_en[p], s_msgs[p], s_rate[p], s_baud[p]);
+    // The Mosaic only applies output config during the quiet boot-time provision,
+    // so the operator must power-cycle the box for the change to take effect.
+    lv_label_set_text(s_status_lbl, "saved - power-cycle box to apply");
+    lv_timer_t *t = lv_timer_create(clear_status_cb, 6000, NULL);
     lv_timer_set_repeat_count(t, 1);   // fire once, then auto-delete
 }
 

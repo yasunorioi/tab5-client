@@ -76,6 +76,22 @@ COM2 出力=Stream3 で非衝突（`mosaic_config.c`）。COM1/COM2 は各々 ON
 (4800..115200) を設定画面で独立設定し NVS 保存・毎起動再送（COM1 既定 ON / COM2 既定 OFF、
 baud 既定 38400。baud は機材に合わせ port 毎）。
 
+### 9. ★Mosaic は「SBF ストリーム開始前の静かな窓」でしかコマンドを適用しない
+RTK 稼働中（SBF が USB1 を流れている）に送った `setNMEAOutput`/`setSBFOutput` は **$R: を
+返さず無視される**（実機で確認：rate 変更も none 停止も効かない。RTCM3 の有無は無関係）。
+効くのは受信機がまだ SBF を出していない起動直後だけ。従って:
+- `mosaic_provision()` は **attitude→USB2/COM1/COM2 NMEA→setSBFOutput(最後)** の順。
+  ストリーム開始を最後にし、全設定を静かな窓で適用する（順序を変えるな）。
+- 各 provision コマンドは **ack するまでリトライ**（`send_acked`, PROVISION_TRIES）。
+  電源投入直後 ~10-15s は USB OUT が NAK してコマンドが落ちるため、最初のコマンドで
+  settling を吸収する。
+- **設定変更は box の電源再投入でのみ反映**（パネル Apply は NVS 保存だけ→「power-cycle
+  box to apply」表示）。⚠ソフト再起動での適用は不可: `esp_restart` は USB を綺麗に
+  再列挙できず、VBUS カット(`board_usb_5v_en`)は mosaic を wedge させた（両方失敗、撤去済み）。
+  唯一確実なのは物理電源再投入（＝mosaic のコールドブート）。
+- `usb_cdc_write`(RTCM3) と `usb_cdc_send_command` は同一 OUT EP を別タスクから叩くので
+  `s_tx_lock` で直列化（`cdc_acm_host_data_tx_blocking` は非 re-entrant）。
+
 ## 実機が無くてもできること
 
 `tests/fixtures/` に実機採取のバイト列（CRC 全数検証済み）。純ロジックはホストの gcc で

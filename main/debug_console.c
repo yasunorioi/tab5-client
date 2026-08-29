@@ -485,7 +485,7 @@ static void register_cmds(void)
         { .command = "flat",  .help = "set a flat cut/fill target at the current height", .func = cmd_flat },
         { .command = "cutfill", .help = "current cut/fill delta vs the active plane", .func = cmd_cutfill },
         { .command = "log",   .help = "microSD CSV logger: log [start|stop] (no arg = status)", .hint = "[start|stop]", .func = cmd_log },
-        { .command = "nmeaout", .help = "show the saved COM1 NMEA output config", .func = cmd_nmeaout },
+        { .command = "nmeaout", .help = "show the saved COM1/COM2 NMEA output config", .func = cmd_nmeaout },
         { .command = "ntrip", .help = "NTRIP client state (RTCM3 in from the base)", .func = cmd_ntrip },
         { .command = "ntripset", .help = "set the base caster: ntripset <host> <port> <mount>", .hint = "<host> <port> <mount>", .func = cmd_ntripset },
         { .command = "ntripreset", .help = "erase caster creds (NTRIP client idles)", .func = cmd_ntripreset },

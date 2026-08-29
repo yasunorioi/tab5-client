@@ -153,6 +153,15 @@ static SemaphoreHandle_t s_disconnected;
 // interface is open. Set on open, cleared on close/disconnect.
 static volatile cdc_acm_dev_hdl_t s_cdc;
 
+// Serializes host→device writes on the shared OUT endpoint. RTCM3 (usb_cdc_write,
+// from the NTRIP task) and ASCII commands (usb_cdc_send_command) both target the
+// same CDC OUT endpoint from different tasks; cdc_acm_host_data_tx_blocking is not
+// re-entrant per device, so overlapping writes must be serialized. (Note: config
+// commands only actually apply during the quiet boot-provision window before SBF
+// streams — see mosaic_config.c — so this lock is purely a driver-safety guard,
+// not the mechanism that makes commands land.)
+static SemaphoreHandle_t s_tx_lock;
+
 // Set once we've pushed the RTCM3 output config to the attached Mosaic; reset on
 // disconnect so a freshly-plugged receiver gets provisioned again.
 static volatile bool s_provisioned;
@@ -207,9 +216,13 @@ esp_err_t usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
 {
     cdc_acm_dev_hdl_t cdc = s_cdc;
     if (cdc == NULL || data == NULL) return ESP_ERR_INVALID_STATE;
-    // Raw pass-through to the receiver (RTCM3 corrections from the NTRIP client).
-    // The Mosaic auto-detects RTCM3 input on any port; no framing needed here.
-    return cdc_acm_host_data_tx_blocking(cdc, data, len, timeout_ms);
+    // Raw pass-through of NTRIP RTCM3 to the receiver (auto-detected on the port).
+    // Serialized under s_tx_lock so it never overlaps a command TX on the shared
+    // OUT endpoint (cdc_acm_host_data_tx_blocking is not re-entrant per device).
+    if (s_tx_lock) xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    esp_err_t err = cdc_acm_host_data_tx_blocking(cdc, data, len, timeout_ms);
+    if (s_tx_lock) xSemaphoreGive(s_tx_lock);
+    return err;
 }
 
 esp_err_t usb_cdc_send_command(const char *cmd, char *reply, size_t reply_max,
@@ -226,12 +239,17 @@ esp_err_t usb_cdc_send_command(const char *cmd, char *reply, size_t reply_max,
     xStreamBufferReset(s_cmd_rx);
     s_cmd_capture = true;
 
+    // Hold the TX lock across the whole line (command + CRLF) so a concurrent
+    // RTCM3 write cannot inject binary mid-command — otherwise the receiver drops
+    // the corrupted line and the config silently fails to apply while RTK streams.
+    if (s_tx_lock) xSemaphoreTake(s_tx_lock, portMAX_DELAY);
     esp_err_t err = cdc_acm_host_data_tx_blocking(cdc, (const uint8_t *)cmd,
                                                   strlen(cmd), timeout_ms);
     if (err == ESP_OK) {
         static const uint8_t crlf[2] = {'\r', '\n'};
         err = cdc_acm_host_data_tx_blocking(cdc, crlf, sizeof(crlf), timeout_ms);
     }
+    if (s_tx_lock) xSemaphoreGive(s_tx_lock);
 
     // Drain the reply: wait up to timeout_ms for the FIRST byte (a command port
     // may be slow to answer), then read until a ~300 ms idle gap (reply complete
@@ -388,6 +406,11 @@ esp_err_t usb_cdc_source_start(void)
 
     s_disconnected = xSemaphoreCreateBinary();
     if (s_disconnected == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_tx_lock = xSemaphoreCreateMutex();
+    if (s_tx_lock == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
