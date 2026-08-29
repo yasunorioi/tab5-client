@@ -42,9 +42,15 @@
       port1 は `msgs1/rate1/en1`（COM1 既定 ON / COM2 既定 OFF）
 - [x] 設定画面に **Port 切替(COM1/COM2)** + **専用 OUTPUT ON/OFF トグル** を追加。
       rate 行は実レート4つ（OFF ボタン廃止＝トグルが on/off を担う）。Apply で両ポート保存＋反映
+- [x] **ポート毎 baud**（4800/9600/19200/38400/57600/115200、既定38400）を設定画面に追加。
+      機材に合わせ port 毎に選択→NVS(`baud`/`baud1`)保存→`setCOMSettings,COMx,baudN` で反映。
+      設定画面が縦に伸びたので scroll(縦)可に。`nmeaout` に baud 表示追加
 - [x] `nmeaout` コンソールは両ポート表示に更新
-- [ ] **実機確認**: パネルで COM2 を ON→Apply→受信機に `setNMEAOutput,Stream3,COM2,...` が
-      通るか、COM2 の RS232 から NMEA が出るか（COM2 が RS232 トランシーバに配線されている前提）
+- [x] 実機(Tab5+P3H): `nmeaout` が baud=… を両ポート表示、受信機は
+      `setCOMSettings,COM2,baud{9600,115200,38400}` を拒否($R?)せず受理
+- [ ] **実機確認(残)**: パネルで COM2 を ON→Apply→受信機に `setNMEAOutput,Stream3,COM2,...`＋
+      選んだ baud が通り、COM2 の RS232 端子から実際に NMEA が出るか
+      （COM2 が RS232 トランシーバに配線されている前提。スコープ/ループバックで確認）
 
 ### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
 - [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を

@@ -52,7 +52,7 @@
 **UI（LVGL, 3画面）**
 - `status_screen.c` — 作業画面 + タッチ indev登録 + 画面遷移の親
 - `map_view.c` — 平面図 MAP（キャンバス直描画）
-- `settings_view.c` — NMEA 出力設定（COM1/COM2 独立・ON/OFF・NVS）
+- `settings_view.c` — NMEA 出力設定（COM1/COM2 独立・ON/OFF・baud・NVS）
 - `touch.c` — ST7123 タッチ（**報告テーブル全点読み**）+ LVGL 用キャッシュ
 - 流用: `display.c`/`esp_lcd_st7123.c`/`tab5_*_init.c`/`backlight.c`/`gnss_view.c`
 
@@ -75,7 +75,7 @@
 
 画面遷移: **作業**（cut/fill 大数字＋縦ライトバー＋Perim/Field/Stop・Flat/Fit/Clear・Map>）
 ⇄ **MAP**（境界＋cut/fill ヒートマップ＋現在位置＋土量、< Work / Vol / Cfg>）
-→ **設定**（Port=COM1/COM2 切替・OUTPUT ON/OFF・message×rate、< Work / Apply）
+→ **設定**（Port=COM1/COM2 切替・OUTPUT ON/OFF・message×rate・baud(4800..115200)、< Work / Apply）
 
 ## 先に潰しておくべきリスク
 

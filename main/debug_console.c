@@ -219,10 +219,11 @@ static int cmd_nmeaout(int argc, char **argv)
         {NMEA_MSG_GSA,"GSA"},{NMEA_MSG_ZDA,"ZDA"},{NMEA_MSG_GSV,"GSV"},
     };
     for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
-        bool en; uint16_t msgs; uint8_t rate;
-        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &msgs, &rate);
-        printf("%s NMEA (saved): %s  rate=%s  msgs=", mosaic_com_name(p),
-               en ? "ON" : "OFF", mosaic_nmea_rate_str(rate));
+        bool en; uint16_t msgs; uint8_t rate, baud;
+        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &msgs, &rate, &baud);
+        printf("%s NMEA (saved): %s  baud=%s  rate=%s  msgs=", mosaic_com_name(p),
+               en ? "ON" : "OFF", mosaic_nmea_baud_str(baud),
+               mosaic_nmea_rate_str(rate));
         bool any = false;
         for (int i = 0; i < 6; i++)
             if (msgs & T[i].b) { printf("%s%s", any ? "+" : "", T[i].n); any = true; }

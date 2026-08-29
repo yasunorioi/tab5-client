@@ -25,6 +25,7 @@ static lv_obj_t *s_onoff_btn;
 static lv_obj_t *s_onoff_lbl;
 static lv_obj_t *s_msg_btn[N_MSGS];
 static lv_obj_t *s_rate_btn[N_RATES];
+static lv_obj_t *s_baud_btn[NMEA_BAUD_COUNT];
 static lv_obj_t *s_status_lbl;
 
 // Working copies for BOTH ports (edited by the toggles; committed on Apply).
@@ -33,6 +34,7 @@ static uint8_t  s_cur;
 static bool     s_en[MOSAIC_COM_COUNT];
 static uint16_t s_msgs[MOSAIC_COM_COUNT];
 static uint8_t  s_rate[MOSAIC_COM_COUNT];
+static uint8_t  s_baud[MOSAIC_COM_COUNT];
 
 static void refresh_highlights(void)
 {
@@ -50,14 +52,17 @@ static void refresh_highlights(void)
     for (int i = 0; i < N_RATES; i++)
         lv_obj_set_style_bg_color(s_rate_btn[i],
             lv_color_hex(i == s_rate[s_cur] ? C_ON : C_OFF), 0);
+    for (int i = 0; i < NMEA_BAUD_COUNT; i++)
+        lv_obj_set_style_bg_color(s_baud_btn[i],
+            lv_color_hex(i == s_baud[s_cur] ? C_ON : C_OFF), 0);
 }
 
 void settings_view_refresh(void)
 {
     for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
-        bool en; uint16_t m; uint8_t r;
-        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &m, &r);
-        s_en[p] = en; s_msgs[p] = m; s_rate[p] = r;
+        bool en; uint16_t m; uint8_t r, b;
+        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &m, &r, &b);
+        s_en[p] = en; s_msgs[p] = m; s_rate[p] = r; s_baud[p] = b;
     }
     if (s_screen) {
         refresh_highlights();
@@ -91,6 +96,12 @@ static void on_rate(lv_event_t *e)
     refresh_highlights();
 }
 
+static void on_baud(lv_event_t *e)
+{
+    s_baud[s_cur] = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    refresh_highlights();
+}
+
 // One-shot: clear the Apply confirmation after a few seconds.
 static void clear_status_cb(lv_timer_t *t)
 {
@@ -105,7 +116,7 @@ static void on_apply(lv_event_t *e)
     esp_err_t err = ESP_OK;
     for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
         esp_err_t r = mosaic_nmea_cfg_apply((mosaic_com_t)p, s_en[p],
-                                            s_msgs[p], s_rate[p]);
+                                            s_msgs[p], s_rate[p], s_baud[p]);
         if (r != ESP_OK) err = r;
     }
     lv_label_set_text(s_status_lbl,
@@ -165,13 +176,16 @@ lv_obj_t *settings_view_build(void)
     lv_obj_set_flex_flow(s_screen, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+    // Scrollable (vertical only) so the bottom nav stays reachable now that the
+    // form has grown (port/on-off/messages/rate/baud). Fits without scrolling on
+    // the 1280-tall panel; the scrollbar only appears if content overflows.
+    lv_obj_set_scroll_dir(s_screen, LV_DIR_VER);
 
     lv_obj_t *title = lv_label_create(s_screen);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_pad_bottom(title, 20, 0);
-    lv_label_set_text(title, "NMEA OUT (RS232 @ 38400)");
+    lv_label_set_text(title, "NMEA OUT (RS232)");
 
     // Port selector: COM1 / COM2 — switches which port the toggles below edit.
     mk_label(s_screen, "Port", 0x8FB0CD);
@@ -198,6 +212,17 @@ lv_obj_t *settings_view_build(void)
     lv_obj_t *rr = mk_row(s_screen);
     for (int i = 0; i < N_RATES; i++)
         s_rate_btn[i] = mk_btn(rr, mosaic_nmea_rate_str(i), on_rate,
+                               (void *)(intptr_t)i, 90);
+
+    // Baud: per-port, dictated by the external machine. Two rows of three.
+    mk_label(s_screen, "Baud", 0x8FB0CD);
+    lv_obj_t *b1 = mk_row(s_screen);
+    for (int i = 0; i < 3; i++)
+        s_baud_btn[i] = mk_btn(b1, mosaic_nmea_baud_str(i), on_baud,
+                               (void *)(intptr_t)i, 90);
+    lv_obj_t *b2 = mk_row(s_screen);
+    for (int i = 3; i < NMEA_BAUD_COUNT; i++)
+        s_baud_btn[i] = mk_btn(b2, mosaic_nmea_baud_str(i), on_baud,
                                (void *)(intptr_t)i, 90);
 
     s_status_lbl = mk_label(s_screen, "", 0x5FE08A);

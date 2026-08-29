@@ -53,6 +53,19 @@ typedef enum {
 // Number of user-selectable rates (the UI's rate row); excludes the OFF sentinel.
 #define NMEA_RATE_SELECTABLE NMEA_RATE_OFF
 
+// Serial baud for a COM port's RS232 feed — the external machine dictates this,
+// so it is per-port and operator-selectable. Default 38400 (index NMEA_BAUD_DEF).
+typedef enum {
+    NMEA_BAUD_4800 = 0,
+    NMEA_BAUD_9600,
+    NMEA_BAUD_19200,
+    NMEA_BAUD_38400,
+    NMEA_BAUD_57600,
+    NMEA_BAUD_115200,
+    NMEA_BAUD_COUNT,
+} nmea_baud_t;
+#define NMEA_BAUD_DEF NMEA_BAUD_38400
+
 // The two configurable RS232 output ports on the mosaic-go.
 typedef enum {
     MOSAIC_COM1 = 0,
@@ -63,16 +76,20 @@ typedef enum {
 // "COM1"/"COM2" for a port index (or "?" if out of range).
 const char *mosaic_com_name(mosaic_com_t port);
 
-// Current NMEA config for a COM port (from NVS, or the per-port default).
+// Current NMEA config for a COM port (from NVS, or the per-port default). Any
+// out-parameter may be NULL.
 void mosaic_nmea_cfg_get(mosaic_com_t port, bool *enabled, uint16_t *msg_mask,
-                         uint8_t *rate);
+                         uint8_t *rate, uint8_t *baud);
 
 // Persist a new NMEA config for a COM port to NVS and, if a CDC interface is
-// open, apply it to the receiver immediately (a disabled port sends "...none").
-// Returns the receiver's apply result (ESP_OK if no interface is open yet — it
-// will take effect on the next provision).
+// open, apply it to the receiver immediately (baud via setCOMSettings, then the
+// NMEA output — a disabled port sends "...none"). Returns the receiver's apply
+// result (ESP_OK if no interface is open yet — it takes effect on next provision).
 esp_err_t mosaic_nmea_cfg_apply(mosaic_com_t port, bool enabled,
-                                uint16_t msg_mask, uint8_t rate);
+                                uint16_t msg_mask, uint8_t rate, uint8_t baud);
 
 // Human-readable rate label ("10Hz".."1Hz", "OFF" for the sentinel) for the UI.
 const char *mosaic_nmea_rate_str(uint8_t rate);
+
+// Human-readable baud label ("4800".."115200") for the UI.
+const char *mosaic_nmea_baud_str(uint8_t baud);
