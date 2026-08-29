@@ -59,8 +59,8 @@
 - [x] **TX 直列化**(`s_tx_lock`): RTCM3 と コマンドの同一 EP 競合を防止
 - [x] パネル Apply は NVS 保存のみ＋「power-cycle box to apply」。設定反映は**box 電源再投入**で。
       ⚠ソフト適用は不可と判明: `esp_restart`=USB 再列挙不完全、VBUS カット=mosaic wedge（両撤去）
-- [ ] **実機確認(残)**: box 電源再投入後、COM2(38400) の端子に `$…GGA` が実際に出るか
-      （COM2 が RS232 トランシーバに配線されている前提。ターミナル/スコープを 38400 で）
+- [x] **実機確認 済**: COM2(38400) の端子に `$…GGA` が出ることを確認（配線 OK）。
+      注意: COM2 baud を 38400 に設定するため、受信側ターミナルも 38400 に合わせること
 
 ### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
 - [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を
