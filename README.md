@@ -10,10 +10,14 @@
 > **実機（Tab5 + P3H）で通し動作。** ESP-IDF 5.4.4/esp32p4 でクリーンビルド。
 > USB→SBF パース→cut/fill、NTRIP client→受信機へ補正→**RTK fixed**（hAcc 2cm/vAcc 4cm）。
 > **3画面タッチ UI**（作業 ⇄ 平面図MAP ⇄ NMEA設定）、外周走行→バランス平面→**切土/盛土 m³**、
-> COM1 から RS232 で外部機器へ NMEA 出力（液晶＋NVS 設定）まで実装・実機確認済み。
+> **COM1/COM2 から RS232 で外部機器へ NMEA 出力**（ポート毎に ON/OFF・メッセージ・baud を
+> 液晶＋NVS 設定）、**microSD への CSV ロガー**まで実装・実機確認済み。
 >
-> **残**: microSD ロガーはコード完成だが SD マウントが HW blocker で未解決。実機は
-> 2アンテナ屋外での pitch/roll・実圃場での土量測定が残（[`docs/todo.md`](docs/todo.md)）。
+> ⚠ Mosaic は SBF ストリーム開始後はコマンドを受け付けないため、**NMEA 出力設定の変更は
+> 箱の電源再投入で反映**される（設定画面は保存のみ／起動時プロビジョニングで適用）。
+>
+> **残**: 実機は 2アンテナ屋外での pitch/roll・実圃場での土量測定が残
+> （[`docs/todo.md`](docs/todo.md)）。
 >
 > 純ロジック層（SBF パーサ / cut-fill / 土量）は受信機も ESP-IDF も無しに
 > `tools/*_selftest.c` をホストの gcc でビルドして全数/解析検証できる。
@@ -36,17 +40,25 @@
 | [`docs/hardware-findings.md`](docs/hardware-findings.md) | **実機実測メモ。** P3H の USB 列挙・permission・SBF 構成、キャスターの実接続検証。すべて一次情報 |
 | [`docs/design.md`](docs/design.md) | 設計方針、決定事項、tab5-caster からの組み替え、リスク |
 | [`tests/fixtures/`](tests/fixtures/) | **実機から採取した本物のバイト列。** 受信機もキャスターも ESP-IDF も無い環境でパーサを全数検証できる |
-| [`tools/`](tools/) | 受信機との対話・採取・CRC 検証スクリプト（PowerShell） |
-| [`notes/memory/`](notes/memory/) | 作業メモの退避 |
+| [`tools/`](tools/) | ホスト検証用 selftest（C: `*_selftest.c`）と受信機対話・採取・CRC 検証スクリプト（Python / PowerShell） |
 
 ## 実機が無くても始められる
 
-```
-pwsh .	ools\parse-sbf.ps1   -Path .	estsixtures\mosaic-g5-p3h-sbf.bin -Seconds 12.01
-pwsh .	ools\parse-rtcm3.ps1 -Path .	estsixtures\eniwa-bd982-rtcm3.bin -Seconds 8
+純ロジック層（SBF パーサ / cut-fill / 土量）は受信機も ESP-IDF も無しに、ホストの
+gcc で全数・解析検証できる（[`tests/fixtures/`](tests/fixtures/) は実機採取・CRC 全数検証済み）:
+
+```sh
+cc -Imain tools/sbf_selftest.c      main/sbf_parser.c -lm && ./a.out tests/fixtures/mosaic-g5-p3h-sbf.bin
+cc -Imain tools/cutfill_selftest.c  main/cutfill.c    -lm && ./a.out
+cc -Imain tools/fieldmap_selftest.c main/fieldmap.c   -lm && ./a.out
+python3 tools/parse_sbf.py tests/fixtures/mosaic-g5-p3h-sbf.bin --dump 1
 ```
 
-どちらも CRC 失敗ゼロ・パディング無しで通る。SBF パーサはこれで完全に検証できる。
+SBF は CRC 失敗ゼロで全ブロックがデコードできる。`tools/*.ps1`（PowerShell）でも同じ採取・
+検証ができる。
+
+> ⚠ フィクスチャは屋内・アンテナ未接続で採取。測位解は無効なので framing/CRC/デコード
+> 配置の検証には使えるが、値の妥当性検証には使えない。
 
 ## 押さえておくべき3点
 
@@ -54,9 +66,9 @@ pwsh .	ools\parse-rtcm3.ps1 -Path .	estsixtures\eniwa-bd982-rtcm3.bin -Seconds 
    コマンドツリーに RTCM3 出力が存在しない。基準局には使えない
    → 補正は自前の BD982（`rtk.toiso.fit:2101/eniwa-bd982`）から取る
 
-2. **USB PID は `0x8231`、CDC COM は2本（USB1=itf0 / USB2=itf2）。**
-   tab5-caster のハードコード（`0x85C0`、itf `{0,2,4}`）とは違う。
-   加えて sweep ループに、存在しない itf で無限リトライするバグがある
+2. **USB PID は `0x8231`、CDC COM は2本（USB1=itf0=SBF / USB2=itf2=NMEA）。**
+   tab5-caster のハードコード（`0x85C0`、itf `{0,2,4}`）とは違う。SBF は itf0 のみ
+   （sweep に itf2 を足すと nmea_source と衝突して USB ホストが wedge する）
 
 3. **NTRIP キャスターは `Transfer-Encoding: chunked` で返す。**
    素通しすると RTCM3 に chunk ヘッダが混入して CRC がランダムに落ちる

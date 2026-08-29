@@ -47,7 +47,7 @@
 - `leveler.c` — 上記を実 PVT から駆動（survey/record/plane/delta/volume の統合）
 - `ntrip_client.c` — 基準局から RTCM3 を de-chunk して受信機へ
 - `mosaic_config.c` / `mosaic_usb.h` — 毎起動プロビジョニング（SBF/NMEA/COM1+COM2）と VID/PID
-- `logger.c` — microSD CSV ロガー（⚠SD マウント未解決）
+- `logger.c` — microSD CSV ロガー（動作。8.3 ファイル名必須＝`CONFIG_FATFS_LFN_NONE`）
 
 **UI（LVGL, 3画面）**
 - `status_screen.c` — 作業画面 + タッチ indev登録 + 画面遷移の親
@@ -116,5 +116,4 @@ Tab5 は 720x1280 の縦長パネル。
 - **pitch → roll の切り替わり**。ベンチでは AttEuler が Do-Not-Use（2アンテナ収束が要る）。
   屋外で測位させ、AttEuler の Pitch/Roll どちらが有効か（`setAttitudeOffset,90,0` 済み）
 - `ReceiverStatus.rx_error`（ベンチで 0x8 = `ERROR: SW,`）が 2アンテナ屋外で消えるか
-- **microSD マウント**（HW blocker）: カードは CMD 応答するがデータ線ゼロ（`logger.c` 参照）
 - 実圃場で `record perim`→走行→`record field`→`survey fit`→`vol` の実測
