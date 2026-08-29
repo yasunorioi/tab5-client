@@ -20,7 +20,8 @@ caster 半分は削除済み。`upstream` remote で tab5-caster を追跡して
 - **3画面タッチ UI**: 作業画面（cut/fill 大数字＋ライトバー＋録画/平面ボタン）⇄
   平面図 MAP（境界＋cut/fill ヒートマップ＋現在位置＋土量）⇄ NMEA 設定（COM1 出力、NVS 保存）
 - 外周走行→バランス平面→**切土/盛土 m³** まで算出
-- COM1 から RS232 で GGA/NMEA を外部機器へ（設定は液晶＋NVS）
+- COM1/COM2 から RS232 で GGA/NMEA を外部機器へ（ポート毎に ON/OFF＋message×rate、
+  設定は液晶＋NVS。COM1 既定 ON / COM2 既定 OFF）
 
 **未解決/残:**
 - microSD CSV ロガーは**コード完成だが SD マウントが通らない**（HW blocker、
@@ -70,8 +71,9 @@ esp32p4 は単精度 FPU・倍精度ソフトfloat。`fieldmap.c` の MLS を do
 地図再描画が ~5s かかり **task watchdog** を踏む。float 化済み（ホスト検証は誤差内で一致）。
 
 ### 8. NMEA stream 番号は SBF と別系
-`setNMEAOutput` のストリームは SBF と独立。COM1 出力=Stream2、パネル NMEA=Stream1 で
-非衝突（`mosaic_config.c`）。
+`setNMEAOutput` のストリームは SBF と独立。パネル NMEA=Stream1、COM1 出力=Stream2、
+COM2 出力=Stream3 で非衝突（`mosaic_config.c`）。COM1/COM2 は各々 ON/OFF＋message×rate を
+設定画面で独立設定し NVS 保存・毎起動再送（COM1 既定 ON / COM2 既定 OFF）。
 
 ## 実機が無くてもできること
 

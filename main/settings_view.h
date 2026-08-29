@@ -1,9 +1,10 @@
-// settings_view.h — COM1 NMEA output settings screen (LVGL).
+// settings_view.h — COM1/COM2 NMEA output settings screen (LVGL).
 //
-// Lets the operator pick which NMEA messages (GGA/RMC/VTG/GSA/ZDA/GSV) and at
-// what rate go out COM1 (the RS232 machine-control feed), Apply to persist +
-// send to the receiver now, and it re-applies on every boot. See mosaic_config.c
-// for the config model + provisioning.
+// Lets the operator pick a COM port (COM1/COM2, the two RS232 machine-control
+// feeds), toggle its output on/off, and pick which NMEA messages (GGA/RMC/VTG/
+// GSA/ZDA/GSV) and at what rate it emits. Apply persists both ports + sends to the
+// receiver now, and it re-applies on every boot. See mosaic_config.c for the
+// config model + provisioning.
 #pragma once
 
 #include "lvgl.h"

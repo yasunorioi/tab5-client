@@ -35,6 +35,17 @@
 - [x] COM1 NMEA を液晶設定（message×rate）→ NVS 保存 → `mosaic_provision` が起動時再送
       （`main/settings_view.c` + `mosaic_config.c`。パネル操作→保存→受信機反映を確認）
 
+### Phase C-2 — COM2 追加 + ポート毎 ON/OFF ✅（コード完成・ビルド済み／実機反映は未確認）
+- [x] `mosaic_config` を単一COM1→**COMポート配列(COM1/COM2)**に一般化。各ポートに
+      `{enabled(master on/off), msgs, rate}`。COM2=Stream3（COM1=Stream2/パネル=Stream1 と非衝突）。
+      boot で両ポートの baud 設定＋NMEA 送信（無効は `none`）。NVS は port0 が旧キー継承・
+      port1 は `msgs1/rate1/en1`（COM1 既定 ON / COM2 既定 OFF）
+- [x] 設定画面に **Port 切替(COM1/COM2)** + **専用 OUTPUT ON/OFF トグル** を追加。
+      rate 行は実レート4つ（OFF ボタン廃止＝トグルが on/off を担う）。Apply で両ポート保存＋反映
+- [x] `nmeaout` コンソールは両ポート表示に更新
+- [ ] **実機確認**: パネルで COM2 を ON→Apply→受信機に `setNMEAOutput,Stream3,COM2,...` が
+      通るか、COM2 の RS232 から NMEA が出るか（COM2 が RS232 トランシーバに配線されている前提）
+
 ### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
 - [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を
       `/sdcard/leveler_NNN.csv` に記録。`log [start|stop]` コマンド。カード有れば自動開始

@@ -42,18 +42,33 @@ static const char *TAG = "mosaic_cfg";
 #define NMEA_MSGS   "GGA+GSV"
 #define NMEA_RATE   "sec1"
 
-// External RS232 output on COM1 (38400) for the machine controller / auto-steer,
-// taken off the mosaic-go's serial port through an RS232 transceiver. Fully
-// independent of the USB SBF path — RTCM3 comes in over USB (NTRIP), so this NMEA
-// carries the RTK-corrected position (quality 4). NMEA output streams are numbered
-// separately from SBF, so Stream2 here does not clash with the panel NMEA
-// (Stream1) or the SBF stream. Which messages + rate are operator-configurable
-// (settings_view.c) and persisted; the defaults below are GGA @ 10 Hz.
-#define COM_PORT        "COM1"
-#define COM_BAUD        "baud38400"
-#define COM_NMEA_STREAM "Stream2"
-#define NMEA_MSG_DEFAULT NMEA_MSG_GGA
+// External RS232 outputs on COM1/COM2 (38400) for the machine controller /
+// auto-steer, taken off the mosaic-go's serial ports through an RS232 transceiver.
+// Fully independent of the USB SBF path — RTCM3 comes in over USB (NTRIP), so this
+// NMEA carries the RTK-corrected position (quality 4). NMEA output streams are
+// numbered separately from SBF, so Stream2/Stream3 here do not clash with the
+// panel NMEA (Stream1) or the SBF stream. Each port's on/off + messages + rate are
+// operator-configurable (settings_view.c) and persisted; the defaults are GGA @
+// 10 Hz, with COM1 enabled and COM2 disabled out of the box.
+#define COM_BAUD          "baud38400"
+#define NMEA_MSG_DEFAULT  NMEA_MSG_GGA
 #define NMEA_RATE_DEFAULT NMEA_RATE_10HZ
+
+// Per-port static config + NVS keys. Port 0 (COM1) keeps the original keys
+// ("msgs"/"rate") for backward compatibility with configs saved before COM2 was
+// added; the "en" master-toggle key is new (default derived in cfg_get). Port 1
+// (COM2) uses its own keys and is disabled by default.
+static const struct {
+    const char *com;      // receiver port name
+    const char *stream;   // NMEA output stream (distinct per port)
+    const char *k_msgs;   // NVS key: message bitmask
+    const char *k_rate;   // NVS key: rate index
+    const char *k_en;     // NVS key: enabled flag
+    bool        def_en;   // default enabled when unset in NVS
+} COM_PORTS[MOSAIC_COM_COUNT] = {
+    { "COM1", "Stream2", "msgs",  "rate",  "en",  true  },
+    { "COM2", "Stream3", "msgs1", "rate1", "en1", false },
+};
 
 // Bit → Septentrio message mnemonic (order = the bit order in mosaic_config.h).
 static const struct { uint16_t bit; const char *name; } NMEA_MSGS_TBL[] = {
@@ -72,27 +87,44 @@ const char *mosaic_nmea_rate_str(uint8_t rate)
     return rate < NMEA_RATE_COUNT ? NMEA_RATE_LABEL[rate] : "?";
 }
 
-void mosaic_nmea_cfg_get(uint16_t *msg_mask, uint8_t *rate)
+const char *mosaic_com_name(mosaic_com_t port)
 {
-    uint16_t m = NMEA_MSG_DEFAULT;
-    uint8_t  r = NMEA_RATE_DEFAULT;
-    nvs_handle_t h;
-    if (nvs_open(NMEA_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u16(h, "msgs", &m);
-        nvs_get_u8(h, "rate", &r);
-        nvs_close(h);
-    }
-    if (msg_mask) *msg_mask = m;
-    if (rate) *rate = r < NMEA_RATE_COUNT ? r : NMEA_RATE_DEFAULT;
+    return port < MOSAIC_COM_COUNT ? COM_PORTS[port].com : "?";
 }
 
-// Build "setNMEAOutput, Stream2, COM1, <GGA+RMC+...>, <rate>" from a config into
-// `out`. Returns false if the config disables the stream (no messages / OFF), in
-// which case *out is the disabling command ("...COM1, none").
-static bool build_nmea_cmd(uint16_t msgs, uint8_t rate, char *out, size_t outlen)
+void mosaic_nmea_cfg_get(mosaic_com_t port, bool *enabled, uint16_t *msg_mask,
+                         uint8_t *rate)
 {
-    if (rate >= NMEA_RATE_OFF || msgs == 0) {
-        snprintf(out, outlen, "setNMEAOutput, " COM_NMEA_STREAM ", " COM_PORT ", none");
+    if (port >= MOSAIC_COM_COUNT) return;
+    uint16_t m = NMEA_MSG_DEFAULT;
+    uint8_t  r = NMEA_RATE_DEFAULT;
+    uint8_t  en = COM_PORTS[port].def_en;
+    bool     have_en = false;
+    nvs_handle_t h;
+    if (nvs_open(NMEA_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u16(h, COM_PORTS[port].k_msgs, &m);
+        nvs_get_u8(h, COM_PORTS[port].k_rate, &r);
+        have_en = (nvs_get_u8(h, COM_PORTS[port].k_en, &en) == ESP_OK);
+        nvs_close(h);
+    }
+    // Migrate pre-COM2 configs: back then rate==OFF meant "disabled". If the new
+    // enabled key is absent, derive on/off from that legacy sentinel.
+    if (!have_en && r == NMEA_RATE_OFF) en = 0;
+    if (enabled)  *enabled = en != 0;
+    if (msg_mask) *msg_mask = m;
+    // OFF is no longer a selectable rate — clamp the stored value to a real rate.
+    if (rate) *rate = r < NMEA_RATE_SELECTABLE ? r : NMEA_RATE_DEFAULT;
+}
+
+// Build "setNMEAOutput, <stream>, <COMx>, <GGA+RMC+...>, <rate>" for a port into
+// `out`. Returns false if the port is disabled or has no messages, in which case
+// *out is the disabling command ("...COMx, none").
+static bool build_nmea_cmd(mosaic_com_t port, bool enabled, uint16_t msgs,
+                           uint8_t rate, char *out, size_t outlen)
+{
+    if (!enabled || msgs == 0 || rate >= NMEA_RATE_OFF) {
+        snprintf(out, outlen, "setNMEAOutput, %s, %s, none",
+                 COM_PORTS[port].stream, COM_PORTS[port].com);
         return false;
     }
     char list[64];
@@ -104,8 +136,8 @@ static bool build_nmea_cmd(uint16_t msgs, uint8_t rate, char *out, size_t outlen
             if (w > 0) pos += (size_t)w;
         }
     }
-    snprintf(out, outlen, "setNMEAOutput, " COM_NMEA_STREAM ", " COM_PORT ", %s, %s",
-             list, NMEA_RATE_CMD[rate]);
+    snprintf(out, outlen, "setNMEAOutput, %s, %s, %s, %s",
+             COM_PORTS[port].stream, COM_PORTS[port].com, list, NMEA_RATE_CMD[rate]);
     return true;
 }
 
@@ -143,72 +175,81 @@ static void provision_nmea(void)
     ESP_LOGI(TAG, "Mosaic NMEA output provisioned on " NMEA_PORT " (" NMEA_MSGS ")");
 }
 
-// Send the COM1 NMEA output command built from (msgs,rate). Returns the receiver
-// result. Best-effort at boot; also used by the live apply path.
-static esp_err_t send_com_nmea(uint16_t msgs, uint8_t rate)
+// Send a port's NMEA output command built from (enabled,msgs,rate). Returns the
+// receiver result. Best-effort at boot; also used by the live apply path.
+static esp_err_t send_com_nmea(mosaic_com_t port, bool enabled, uint16_t msgs,
+                               uint8_t rate)
 {
     char cmd[160], reply[256];
     size_t n = 0;
-    build_nmea_cmd(msgs, rate, cmd, sizeof(cmd));
+    build_nmea_cmd(port, enabled, msgs, rate, cmd, sizeof(cmd));
     esp_err_t err = usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "COM NMEA TX failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "%s NMEA TX failed: %s", COM_PORTS[port].com,
+                 esp_err_to_name(err));
         return err;
     }
     if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected COM NMEA output ($R?)");
+        ESP_LOGW(TAG, "Mosaic rejected %s NMEA output ($R?)", COM_PORTS[port].com);
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "Mosaic COM1 NMEA provisioned (%s)", mosaic_nmea_rate_str(rate));
+    ESP_LOGI(TAG, "Mosaic %s NMEA provisioned (%s)", COM_PORTS[port].com,
+             enabled ? mosaic_nmea_rate_str(rate) : "OFF");
     return ESP_OK;
 }
 
-// Best-effort: COM1 (38400 8N1) NMEA for an external RS232 consumer (blade
-// controller / auto-steer), from the operator's saved config. Sets the COM baud
-// first, then the NMEA output. Logs only — a failure here costs the RS232 feed,
-// never the SBF data path. COM1 is a distinct port from our USB1 command channel,
-// so changing its baud is safe.
-static void provision_com_gga(void)
+// Best-effort: RS232 NMEA on both COM ports (38400 8N1) for external consumers
+// (blade controller / auto-steer), from the operator's saved config. Sets each
+// port's baud first (even when disabled, so a later live-enable needs no reboot),
+// then the NMEA output. Logs only — a failure here costs the RS232 feed, never the
+// SBF data path. The COM ports are distinct from our USB1 command channel, so
+// changing their baud is safe.
+static void provision_com_ports(void)
 {
-    char cmd[128], reply[256];
-    size_t n = 0;
-
-    snprintf(cmd, sizeof(cmd), "setCOMSettings, " COM_PORT ", " COM_BAUD);
-    if (usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000) != ESP_OK) {
-        ESP_LOGW(TAG, "COM settings TX failed");
-        return;
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
+        char cmd[128], reply[256];
+        size_t n = 0;
+        snprintf(cmd, sizeof(cmd), "setCOMSettings, %s, " COM_BAUD, COM_PORTS[p].com);
+        if (usb_cdc_send_command(cmd, reply, sizeof(reply), &n, 2000) != ESP_OK) {
+            ESP_LOGW(TAG, "%s settings TX failed", COM_PORTS[p].com);
+            continue;
+        }
+        if (buf_contains(reply, n, "$R?")) {
+            ESP_LOGW(TAG, "Mosaic rejected setCOMSettings %s ($R?) — continuing",
+                     COM_PORTS[p].com);
+        }
+        bool en; uint16_t msgs; uint8_t rate;
+        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &msgs, &rate);
+        send_com_nmea((mosaic_com_t)p, en, msgs, rate);
     }
-    if (buf_contains(reply, n, "$R?")) {
-        ESP_LOGW(TAG, "Mosaic rejected setCOMSettings ($R?) — continuing");
-    }
-
-    uint16_t msgs; uint8_t rate;
-    mosaic_nmea_cfg_get(&msgs, &rate);
-    send_com_nmea(msgs, rate);
 }
 
-esp_err_t mosaic_nmea_cfg_apply(uint16_t msg_mask, uint8_t rate)
+esp_err_t mosaic_nmea_cfg_apply(mosaic_com_t port, bool enabled,
+                                uint16_t msg_mask, uint8_t rate)
 {
-    if (rate >= NMEA_RATE_COUNT) rate = NMEA_RATE_DEFAULT;
+    if (port >= MOSAIC_COM_COUNT) return ESP_ERR_INVALID_ARG;
+    if (rate >= NMEA_RATE_SELECTABLE) rate = NMEA_RATE_DEFAULT;
     nvs_handle_t h;
     if (nvs_open(NMEA_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u16(h, "msgs", msg_mask);
-        nvs_set_u8(h, "rate", rate);
+        nvs_set_u16(h, COM_PORTS[port].k_msgs, msg_mask);
+        nvs_set_u8(h, COM_PORTS[port].k_rate, rate);
+        nvs_set_u8(h, COM_PORTS[port].k_en, enabled ? 1 : 0);
         nvs_commit(h);
         nvs_close(h);
     }
     // Apply now if the receiver's command interface is open; otherwise it takes
     // effect on the next provision (usb_cdc_send_command returns INVALID_STATE).
-    esp_err_t err = send_com_nmea(msg_mask, rate);
+    esp_err_t err = send_com_nmea(port, enabled, msg_mask, rate);
     return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;
 }
 
-// All the auxiliary (non-SBF) outputs: panel NMEA on USB2 + RS232 GGA on COM1.
-// Each is independent and best-effort, so one being rejected never blocks the other.
+// All the auxiliary (non-SBF) outputs: panel NMEA on USB2 + RS232 NMEA on the COM
+// ports. Each is independent and best-effort, so one being rejected never blocks
+// the others.
 static void provision_aux_outputs(void)
 {
     provision_nmea();
-    provision_com_gga();
+    provision_com_ports();
 }
 
 esp_err_t mosaic_provision(void)

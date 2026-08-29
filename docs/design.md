@@ -31,7 +31,7 @@
         ▼
  usb_cdc_source.c ──► gnss_state.c (SBF パーサ状態) ──┐
                                                        ├─► leveler.c ─┬─ cutfill.c  (バランス平面/delta)
-   (COM1 → RS232 外部機器へ GGA/NMEA)                  │              └─ fieldmap.c (外周/点群/土量 m³)
+   (COM1/COM2 → RS232 外部機器へ GGA/NMEA)                  │              └─ fieldmap.c (外周/点群/土量 m³)
                                                        └─► 画面 (下記)
 ```
 
@@ -46,13 +46,13 @@
 - `fieldmap.c` — 境界ポリゴン + 点群 + **MLS 補間で切土/盛土 m³**（MLS は float）
 - `leveler.c` — 上記を実 PVT から駆動（survey/record/plane/delta/volume の統合）
 - `ntrip_client.c` — 基準局から RTCM3 を de-chunk して受信機へ
-- `mosaic_config.c` / `mosaic_usb.h` — 毎起動プロビジョニング（SBF/NMEA/COM1）と VID/PID
+- `mosaic_config.c` / `mosaic_usb.h` — 毎起動プロビジョニング（SBF/NMEA/COM1+COM2）と VID/PID
 - `logger.c` — microSD CSV ロガー（⚠SD マウント未解決）
 
 **UI（LVGL, 3画面）**
 - `status_screen.c` — 作業画面 + タッチ indev登録 + 画面遷移の親
 - `map_view.c` — 平面図 MAP（キャンバス直描画）
-- `settings_view.c` — NMEA 出力設定（NVS）
+- `settings_view.c` — NMEA 出力設定（COM1/COM2 独立・ON/OFF・NVS）
 - `touch.c` — ST7123 タッチ（**報告テーブル全点読み**）+ LVGL 用キャッシュ
 - 流用: `display.c`/`esp_lcd_st7123.c`/`tab5_*_init.c`/`backlight.c`/`gnss_view.c`
 
@@ -68,14 +68,14 @@
 | 分類 | コマンド |
 |---|---|
 | 測位/SBF | `stats` `sbf` `usb` `nmea` `touch` |
-| 受信機 | `mosaic <cmd>` `nmeaout`（COM1設定表示）`ntrip`/`ntripset`/`ntripreset` |
+| 受信機 | `mosaic <cmd>` `nmeaout`（COM1/COM2設定表示）`ntrip`/`ntripset`/`ntripreset` |
 | 均平 | `survey [add\|clear\|fit]` `record <perim\|field\|stop>` `vol` `flat` `cutfill` |
 | 画面/検証 | `screen <work\|map>` `demofield`（合成圃場）`log [start\|stop]` |
 | 設定 | `wifiset` `wifireset` `webadmin` |
 
 画面遷移: **作業**（cut/fill 大数字＋縦ライトバー＋Perim/Field/Stop・Flat/Fit/Clear・Map>）
 ⇄ **MAP**（境界＋cut/fill ヒートマップ＋現在位置＋土量、< Work / Vol / Cfg>）
-→ **設定**（COM1 NMEA の message×rate、< Work / Apply）
+→ **設定**（Port=COM1/COM2 切替・OUTPUT ON/OFF・message×rate、< Work / Apply）
 
 ## 先に潰しておくべきリスク
 

@@ -214,17 +214,20 @@ static int cmd_log(int argc, char **argv)
 static int cmd_nmeaout(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    uint16_t msgs; uint8_t rate;
-    mosaic_nmea_cfg_get(&msgs, &rate);
     static const struct { uint16_t b; const char *n; } T[] = {
         {NMEA_MSG_GGA,"GGA"},{NMEA_MSG_RMC,"RMC"},{NMEA_MSG_VTG,"VTG"},
         {NMEA_MSG_GSA,"GSA"},{NMEA_MSG_ZDA,"ZDA"},{NMEA_MSG_GSV,"GSV"},
     };
-    printf("COM1 NMEA (saved): rate=%s  msgs=", mosaic_nmea_rate_str(rate));
-    bool any = false;
-    for (int i = 0; i < 6; i++)
-        if (msgs & T[i].b) { printf("%s%s", any ? "+" : "", T[i].n); any = true; }
-    printf("%s\n", any ? "" : "(none)");
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
+        bool en; uint16_t msgs; uint8_t rate;
+        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &msgs, &rate);
+        printf("%s NMEA (saved): %s  rate=%s  msgs=", mosaic_com_name(p),
+               en ? "ON" : "OFF", mosaic_nmea_rate_str(rate));
+        bool any = false;
+        for (int i = 0; i < 6; i++)
+            if (msgs & T[i].b) { printf("%s%s", any ? "+" : "", T[i].n); any = true; }
+        printf("%s\n", any ? "" : "(none)");
+    }
     return 0;
 }
 

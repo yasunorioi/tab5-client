@@ -17,44 +17,77 @@ static const struct { uint16_t bit; const char *name; } MSGS[] = {
 };
 #define N_MSGS (sizeof(MSGS) / sizeof(MSGS[0]))
 
+#define N_RATES NMEA_RATE_SELECTABLE   // rate buttons (10/5/2/1 Hz; no OFF)
+
 static lv_obj_t *s_screen;
+static lv_obj_t *s_port_btn[MOSAIC_COM_COUNT];
+static lv_obj_t *s_onoff_btn;
+static lv_obj_t *s_onoff_lbl;
 static lv_obj_t *s_msg_btn[N_MSGS];
-static lv_obj_t *s_rate_btn[NMEA_RATE_COUNT];
+static lv_obj_t *s_rate_btn[N_RATES];
 static lv_obj_t *s_status_lbl;
 
-// Working copy (edited by the toggles; committed on Apply).
-static uint16_t s_msgs;
-static uint8_t  s_rate;
+// Working copies for BOTH ports (edited by the toggles; committed on Apply).
+// s_cur is the port currently shown/edited; the port selector switches it.
+static uint8_t  s_cur;
+static bool     s_en[MOSAIC_COM_COUNT];
+static uint16_t s_msgs[MOSAIC_COM_COUNT];
+static uint8_t  s_rate[MOSAIC_COM_COUNT];
 
 static void refresh_highlights(void)
 {
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++)
+        lv_obj_set_style_bg_color(s_port_btn[p],
+            lv_color_hex(p == s_cur ? C_ON : C_OFF), 0);
+
+    bool on = s_en[s_cur];
+    lv_obj_set_style_bg_color(s_onoff_btn, lv_color_hex(on ? C_ON : 0x7A2E2E), 0);
+    lv_label_set_text(s_onoff_lbl, on ? "OUTPUT: ON" : "OUTPUT: OFF");
+
     for (size_t i = 0; i < N_MSGS; i++)
         lv_obj_set_style_bg_color(s_msg_btn[i],
-            lv_color_hex((s_msgs & MSGS[i].bit) ? C_ON : C_OFF), 0);
-    for (int i = 0; i < NMEA_RATE_COUNT; i++)
+            lv_color_hex((s_msgs[s_cur] & MSGS[i].bit) ? C_ON : C_OFF), 0);
+    for (int i = 0; i < N_RATES; i++)
         lv_obj_set_style_bg_color(s_rate_btn[i],
-            lv_color_hex(i == s_rate ? C_ON : C_OFF), 0);
+            lv_color_hex(i == s_rate[s_cur] ? C_ON : C_OFF), 0);
 }
 
 void settings_view_refresh(void)
 {
-    mosaic_nmea_cfg_get(&s_msgs, &s_rate);
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
+        bool en; uint16_t m; uint8_t r;
+        mosaic_nmea_cfg_get((mosaic_com_t)p, &en, &m, &r);
+        s_en[p] = en; s_msgs[p] = m; s_rate[p] = r;
+    }
     if (s_screen) {
         refresh_highlights();
         if (s_status_lbl) lv_label_set_text(s_status_lbl, "");
     }
 }
 
+static void on_port(lv_event_t *e)
+{
+    s_cur = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    refresh_highlights();
+}
+
+static void on_onoff(lv_event_t *e)
+{
+    (void)e;
+    s_en[s_cur] = !s_en[s_cur];
+    refresh_highlights();
+}
+
 static void on_msg(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
-    s_msgs ^= MSGS[i].bit;
+    s_msgs[s_cur] ^= MSGS[i].bit;
     refresh_highlights();
 }
 
 static void on_rate(lv_event_t *e)
 {
-    s_rate = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    s_rate[s_cur] = (uint8_t)(intptr_t)lv_event_get_user_data(e);
     refresh_highlights();
 }
 
@@ -68,7 +101,13 @@ static void clear_status_cb(lv_timer_t *t)
 static void on_apply(lv_event_t *e)
 {
     (void)e;
-    esp_err_t err = mosaic_nmea_cfg_apply(s_msgs, s_rate);
+    // Commit both ports so edits made on either tab are persisted + applied.
+    esp_err_t err = ESP_OK;
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++) {
+        esp_err_t r = mosaic_nmea_cfg_apply((mosaic_com_t)p, s_en[p],
+                                            s_msgs[p], s_rate[p]);
+        if (r != ESP_OK) err = r;
+    }
     lv_label_set_text(s_status_lbl,
                       err == ESP_OK ? "saved + applied to receiver"
                                     : "saved (apply failed - see log)");
@@ -132,9 +171,21 @@ lv_obj_t *settings_view_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_pad_bottom(title, 20, 0);
-    lv_label_set_text(title, "NMEA OUT - COM1");
+    lv_label_set_text(title, "NMEA OUT (RS232 @ 38400)");
 
-    mk_label(s_screen, "Messages (RS232 @ 38400)", 0x8FB0CD);
+    // Port selector: COM1 / COM2 — switches which port the toggles below edit.
+    mk_label(s_screen, "Port", 0x8FB0CD);
+    lv_obj_t *pr = mk_row(s_screen);
+    for (int p = 0; p < MOSAIC_COM_COUNT; p++)
+        s_port_btn[p] = mk_btn(pr, mosaic_com_name((mosaic_com_t)p), on_port,
+                               (void *)(intptr_t)p, 90);
+
+    // Master on/off toggle for the selected port (full-width).
+    lv_obj_t *tr = mk_row(s_screen);
+    s_onoff_btn = mk_btn(tr, "OUTPUT: ON", on_onoff, NULL, 90);
+    s_onoff_lbl = lv_obj_get_child(s_onoff_btn, 0);
+
+    mk_label(s_screen, "Messages", 0x8FB0CD);
     // Two rows of three message toggles.
     lv_obj_t *m1 = mk_row(s_screen);
     for (int i = 0; i < 3; i++)
@@ -145,7 +196,7 @@ lv_obj_t *settings_view_build(void)
 
     mk_label(s_screen, "Rate", 0x8FB0CD);
     lv_obj_t *rr = mk_row(s_screen);
-    for (int i = 0; i < NMEA_RATE_COUNT; i++)
+    for (int i = 0; i < N_RATES; i++)
         s_rate_btn[i] = mk_btn(rr, mosaic_nmea_rate_str(i), on_rate,
                                (void *)(intptr_t)i, 90);
 
