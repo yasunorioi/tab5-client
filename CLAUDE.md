@@ -23,9 +23,10 @@ caster 半分は削除済み。`upstream` remote で tab5-caster を追跡して
 - COM1/COM2 から RS232 で GGA/NMEA を外部機器へ（ポート毎に ON/OFF＋message×rate＋baud、
   設定は液晶＋NVS。COM1 既定 ON / COM2 既定 OFF）
 
+- microSD CSV ロガー**動作**（旧マウント不可はカード不良。良品カードで mount 成功、
+  `/sdcard/lvl_NNN.csv` に記録。8.3 名必須＝`CONFIG_FATFS_LFN_NONE`）
+
 **未解決/残:**
-- microSD CSV ロガーは**コード完成だが SD マウントが通らない**（HW blocker、
-  `main/logger.c` の `mount_sd()` コメント参照）
 - 実機ブリングアップ残: 2アンテナ屋外での pitch/roll・`rx_error`、実圃場での `record`→`vol`
 
 ## 応答は日本語で

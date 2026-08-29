@@ -62,15 +62,16 @@
 - [x] **実機確認 済**: COM2(38400) の端子に `$…GGA` が出ることを確認（配線 OK）。
       注意: COM2 baud を 38400 に設定するため、受信側ターミナルも 38400 に合わせること
 
-### Phase D — microSD CSV ロガー ⚠（コード完成・SD マウントは HW blocker）
+### Phase D — microSD CSV ロガー ✅（実機動作確認済み）
 - [x] CSV ロガー実装（`main/logger.c`）: 1Hz で PVT/Att/cut-fill を
-      `/sdcard/leveler_NNN.csv` に記録。`log [start|stop]` コマンド。カード有れば自動開始
+      `/sdcard/lvl_NNN.csv` に記録。`log [start|stop]` コマンド。カード有れば自動開始
 - [x] Tab5 SD 配線確定（M5 BSP: SDMMC slot0 4bit、CLK43/CMD44/D0-3=39-42、LDO ch4）
-- [ ] **⚠ SD マウントが通らない**（次セッションで HW 調査）。カードは CMD 応答するが
-      データ線が全ゼロ(SCR=0)→ FR_NO_FILESYSTEM(13)。FAT32・4bit/1bit・LDO 有無すべて失敗。
-      内蔵 LDO "voltage 0 out of [500,2700]" 警告。`logger.c` の mount_sd() コメントに
-      調査手順（良品カード再確認 / SD VDD の給電経路 / 動作 M5 demo との差分）を記載
-- [ ] マウント解決後: 実機で `log` の rows 増加 + CSV 内容確認
+- [x] **旧「SD マウント不可」は カード不良**だった。良品カードで `SD mounted USDU1 19073MB`。
+      （LDO "voltage 0" 警告と SCR=0 ログは無害/別物＝C6 WiFi SDIO であり microSD 無関係）
+- [x] **8.3 ファイル名修正**: `CONFIG_FATFS_LFN_NONE` のため `leveler_000`(11字)は fopen 失敗。
+      `lvl_%03d.csv`(8.3準拠)に変更 → マウント後のファイル作成も成功
+- [x] 実機: `sd=mounted logging=on rows=…増加 file=/sdcard/lvl_000.csv`、RTK fixed で記録継続を確認
+- [ ] （任意）カードを PC で開いて CSV 内容の目視確認
 
 ## 実機ブリングアップ 残（2アンテナ + 屋外が要る）
 - [ ] **pitch / roll**。ベンチでは AttEuler が Do-Not-Use（2アンテナ収束が必要）。

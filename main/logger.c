@@ -47,17 +47,14 @@ static esp_err_t mount_sd(void)
 {
     // Config faithful to M5Stack's Tab5 BSP (slot 0, 4-bit, on-chip LDO ch4 @3.3V).
     //
-    // ⚠ BLOCKED on this unit (2026-08): the card answers CMD (CID reads: MANF 0x92)
-    // but every DATA-line read returns zeros (SCR sd_spec=0 bus_width=0), so mount
-    // fails with FR_NO_FILESYSTEM (13) even on a freshly FAT32-formatted card, in
-    // both 4-bit and 1-bit, with and without the pwr_ctrl LDO. The on-chip LDO also
-    // warns "voltage 0 out of [500,2700]". Symptoms = the card is powered enough to
-    // answer commands but data transfer fails — a Tab5 SD power/signal integration
-    // detail, NOT a logic bug (this file matches M5's BSP). To resolve, next session:
-    //   - reseat / try a known-good card first (cheapest check)
-    //   - confirm whether SD VDD is the on-chip LDO or a board rail + an I/O-expander
-    //     enable (cf. board_power.c USB5V_EN); the P4 internal LDO may not reach 3.3V
-    //   - diff init order/sdkconfig against a WORKING M5Tab5-UserDemo build
+    // RESOLVED (2026-08): the earlier FR_NO_FILESYSTEM(13) / all-zero DATA lines was
+    // simply a BAD CARD — a known-good card mounts cleanly here (verified: "SD
+    // mounted USDU1 19073MB", rows accumulating). This config was correct all along.
+    // (The on-chip-LDO "voltage 0 out of [500,2700]" warning is benign and unrelated;
+    // so are the SCR sd_spec=0 lines in the boot log — those come from the C6
+    // ESP-Hosted WiFi SDIO slave, NOT the microSD.) NB: filenames must stay 8.3 —
+    // this build has CONFIG_FATFS_LFN_NONE, so a long base name makes fopen() fail
+    // even after a successful mount (see open_file).
     esp_err_t err;
     sd_pwr_ctrl_ldo_config_t ldo_cfg = { .ldo_chan_id = SD_LDO_CHAN };
     if (s_pwr == NULL) {
@@ -93,12 +90,15 @@ static esp_err_t mount_sd(void)
     return ESP_OK;
 }
 
-// Open the next free /sdcard/leveler_NNN.csv and write the header.
+// Open the next free /sdcard/lvl_NNN.csv and write the header. The name is kept
+// within 8.3 (base <= 8 chars) on purpose: this build has FATFS long-filename
+// support disabled (CONFIG_FATFS_LFN_NONE), so a longer base like "leveler_000"
+// makes fopen() fail even though the card mounts fine.
 static void open_file(void)
 {
     for (int i = 0; i < 1000; i++) {
         char p[40];
-        snprintf(p, sizeof(p), MOUNT_POINT "/leveler_%03d.csv", i);
+        snprintf(p, sizeof(p), MOUNT_POINT "/lvl_%03d.csv", i);
         struct stat st;
         if (stat(p, &st) == 0) continue;    // exists — try next
         s_file = fopen(p, "w");
